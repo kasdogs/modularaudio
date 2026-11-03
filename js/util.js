@@ -72,3 +72,6 @@ export function typingInField() {
     const a = document.activeElement;
     return a && (a.tagName === 'INPUT' && a.type !== 'range' || a.tagName === 'TEXTAREA' || a.tagName === 'SELECT' || a.isContentEditable);
 }
+
+// Set a .meter-fill element to a 0..1 level.
+export function setMeter(fill, v) { fill.style.setProperty('--v', String(Math.max(0, Math.min(1, v)))); }

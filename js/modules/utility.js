@@ -1,7 +1,7 @@
 // Utilities: Scope, Output.
 import { registerModule } from '../patch.js';
 import { audio } from '../audio.js';
-import { el, formatDb, dbToGain } from '../util.js';
+import { el, formatDb, dbToGain, setMeter } from '../util.js';
 
 registerModule({
     type: 'scope', title: 'Scope', category: 'Utilities', blurb: 'Oscilloscope with pass-through',
@@ -95,7 +95,7 @@ registerModule({
             for (let i = 0; i < buf.length; i++) pk = Math.max(pk, Math.abs(buf[i]));
             hold = Math.max(pk, hold * 0.92);
             const db = hold > 0 ? 20 * Math.log10(hold) : -60;
-            meter.firstChild.style.width = `${Math.max(0, Math.min(1, (db + 48) / 48)) * 100}%`;
+            setMeter(meter.firstChild, (db + 48) / 48);
         });
         m.addInput('in', 'In', 'audio', input);
         return {

@@ -141,10 +141,10 @@ export class Workspace {
         modEl.style.zIndex = String(++this.topZ);
     }
     // Find a free spot near the centre of the visible area.
-    freeSpot(width = 200, height = 260) {
+    freeSpot(width = 200, height = 260, exclude = null) {
         const r = this.ws.getBoundingClientRect();
         const c = this.toCanvas(r.left + r.width / 2, r.top + r.height / 2);
-        const boxes = [...this.patch.modules.values()].map((m) => ({ x: m.x, y: m.y, w: m.element.offsetWidth || 200, h: m.element.offsetHeight || 200 }));
+        const boxes = [...this.patch.modules.values()].filter((m) => m !== exclude).map((m) => ({ x: m.x, y: m.y, w: m.element.offsetWidth || 200, h: m.element.offsetHeight || 200 }));
         const hits = (x, y) => boxes.some((b) => x < b.x + b.w + 12 && x + width + 12 > b.x && y < b.y + b.h + 12 && y + height + 12 > b.y);
         const start = { x: c.x - width / 2, y: c.y - height / 2 };
         for (let ring = 0; ring < 12; ring++) {
@@ -155,6 +155,12 @@ export class Workspace {
             }
         }
         return { x: start.x + Math.random() * 60, y: start.y + Math.random() * 60 };
+    }
+    // Move a just-added module to a free spot using its real rendered size.
+    place(m) {
+        const spot = this.freeSpot(m.element.offsetWidth, m.element.offsetHeight, m);
+        m.setPosition(spot.x, spot.y);
+        this.patch.changed('layout');
     }
     // Push modules down within each column so none overlap (used for the example layout).
     stackColumns(gap = 20) {

@@ -1,6 +1,6 @@
 // Shaping and control: Filter, VCA, ADSR, Mixer.
 import { registerModule } from '../patch.js';
-import { el, formatFrequency, formatTime, formatPercent } from '../util.js';
+import { el, formatFrequency, formatTime, formatPercent, setMeter } from '../util.js';
 
 registerModule({
     type: 'filter', title: 'Filter', category: 'Processors', blurb: '12/24 dB multimode with 1V/oct cutoff CV',
@@ -105,7 +105,7 @@ registerModule({
         const manual = ctx.createConstantSource(); manual.offset.value = 0; manual.start();
         manual.connect(node);
         const canvas = el('canvas', { class: 'display', width: 352, height: 96, style: { height: '48px' } });
-        const meter = el('div', { class: 'meter' }, el('div', { class: 'meter-fill' }));
+        const meter = el('div', { class: 'meter' }, el('div', { class: 'meter-fill plain' }));
         const trig = el('button', { class: 'param-button', type: 'button', text: 'Hold to Trigger' });
         m.content.append(canvas, meter);
         m.slider('attack'); m.slider('decay'); m.slider('sustain'); m.slider('release');
@@ -115,7 +115,7 @@ registerModule({
         trig.addEventListener('pointerdown', down);
         trig.addEventListener('pointerup', up);
         trig.addEventListener('pointercancel', up);
-        node.port.onmessage = (e) => { meter.firstChild.style.width = `${Math.min(1, e.data) * 100}%`; };
+        node.port.onmessage = (e) => setMeter(meter.firstChild, e.data);
         const draw = () => {
             const g = canvas.getContext('2d');
             const W = canvas.width, H = canvas.height, pad = 6;

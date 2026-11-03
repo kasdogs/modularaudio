@@ -329,7 +329,13 @@ button.param-button.active { background-color: var(--slider-thumb); color: #fff;
 .led { width: 10px; height: 10px; border-radius: 50%; background: var(--led-off); display: inline-block; transition: background-color 0.05s; flex-shrink: 0; }
 .led.on { background: var(--led-on); box-shadow: 0 0 6px var(--led-on); }
 .meter { height: 6px; background: var(--slider-track); border-radius: 3px; overflow: hidden; margin-bottom: 0.4rem; }
-.meter-fill { height: 100%; width: 0; background: linear-gradient(90deg, #10b981 0%, #10b981 70%, #f59e0b 85%, #ef4444 100%); background-size: 100px 100%; transition: width 0.05s linear; }
+.meter-fill {
+    /* The gradient always spans the whole meter; the level only reveals part of it. */
+    height: 100%; width: 100%; --v: 0;
+    background: linear-gradient(90deg, #10b981 0%, #10b981 70%, #f59e0b 85%, #ef4444 100%);
+    clip-path: inset(0 calc((1 - var(--v)) * 100%) 0 0);
+}
+.meter-fill.plain { background: var(--display-line); }
 .info-row { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; font-size: 0.75rem; margin-bottom: 0.4rem; }
 
 /* Sequencer */

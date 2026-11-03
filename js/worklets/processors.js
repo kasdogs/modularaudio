@@ -218,6 +218,41 @@ class SequencerProcessor extends AudioWorkletProcessor {
     }
 }
 
+// --- Bitcrusher: bit depth and sample-rate reduction, per-channel state ---
+class CrushProcessor extends AudioWorkletProcessor {
+    static get parameterDescriptors() {
+        return [
+            { name: 'bits', defaultValue: 8, minValue: 1, maxValue: 16, automationRate: 'a-rate' },
+            { name: 'reduce', defaultValue: 1, minValue: 1, maxValue: 64, automationRate: 'k-rate' },
+        ];
+    }
+    constructor() { super(); this.phase = []; this.held = []; }
+    process(inputs, outputs, params) {
+        const input = inputs[0], output = outputs[0];
+        if (!input || !input.length) return true;
+        const bits = params.bits;
+        const reduce = Math.max(1, params.reduce[0]);
+        for (let c = 0; c < output.length; c++) {
+            const inp = input[c] || input[0], out = output[c];
+            let ph = this.phase[c] || 0, h = this.held[c] || 0;
+            for (let i = 0; i < out.length; i++) {
+                ph += 1;
+                if (ph >= reduce) {
+                    ph -= reduce;
+                    const b = Math.min(16, Math.max(1, bits.length > 1 ? bits[i] : bits[0]));
+                    const levels = Math.pow(2, b - 1); // fractional depths are allowed
+                    h = Math.round(inp[i] * levels) / levels;
+                }
+                out[i] = h;
+            }
+            this.phase[c] = ph;
+            this.held[c] = h;
+        }
+        return true;
+    }
+}
+
+registerProcessor('ma-crush', CrushProcessor);
 registerProcessor('ma-lfo', LfoProcessor);
 registerProcessor('ma-adsr', AdsrProcessor);
 registerProcessor('ma-clock', ClockProcessor);

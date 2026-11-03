@@ -9,11 +9,12 @@ import { EXAMPLE_PATCH } from './example.js';
 import './modules/sources.js';
 import './modules/shaping.js';
 import './modules/effects.js';
+import './modules/fx.js';
 import './modules/sequencing.js';
 import './modules/utility.js';
 
 const PATCH_KEY = 'modularaudio.patch';
-const CATEGORY_ORDER = ['Sources', 'Modulation', 'Processors', 'Effects', 'Sequencing', 'Utilities'];
+const CATEGORY_ORDER = ['Sources', 'Modulation', 'Processors', 'Effects', 'Dynamics & EQ', 'Distortion', 'Sequencing', 'Utilities'];
 const $ = (id) => document.getElementById(id);
 
 const isMobile = () => window.matchMedia('(max-width: 767px)').matches;
@@ -100,9 +101,8 @@ function buildBrowser(patch, ws) {
         for (const def of groups[cat]) {
             const btn = el('button', { class: 'add-module-btn', type: 'button', dataset: { moduleType: def.type } }, def.title, el('small', { text: def.blurb || '' }));
             btn.addEventListener('click', () => {
-                const spot = ws.freeSpot(def.width || 200, 280);
-                const m = patch.addModule(def.type, spot);
-                if (m) ws.bringToFront(m.element);
+                const m = patch.addModule(def.type, ws.freeSpot(def.width || 200, 280));
+                if (m) { ws.place(m); ws.bringToFront(m.element); }
                 if (isMobile()) setBrowserCollapsed(true);
             });
             list.append(btn);
