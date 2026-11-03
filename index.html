@@ -1,1 +1,107 @@
-modularaudio placeholder
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="theme-color" content="#1f2937">
+    <title>Modular Audio</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="css/app.css">
+    <script>
+        // Apply the saved theme before first paint to avoid a flash.
+        try {
+            const s = JSON.parse(localStorage.getItem('modularaudio.settings') || '{}');
+            const dark = s.theme ? s.theme === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
+            if (dark) document.documentElement.classList.add('dark');
+        } catch (e) {}
+    </script>
+    <script type="module" src="js/main.js"></script>
+</head>
+<body>
+    <header id="app-header">
+        <div class="header-left">
+            <button id="browser-toggle" class="header-btn" title="Modules" aria-label="Toggle module browser">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16m-7 6h7"/></svg>
+            </button>
+            <h1 class="app-title">Modular Audio</h1>
+        </div>
+        <div class="header-right">
+            <button id="audio-status" class="audio-status" title="Start audio">
+                <span class="status-dot"></span><span class="status-text">Tap to start audio</span>
+            </button>
+            <button id="view-reset-btn" class="header-btn" title="Fit patch to screen" aria-label="Fit patch to screen">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
+            </button>
+            <button id="settings-btn" class="header-btn" title="Settings" aria-label="Settings">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+            </button>
+        </div>
+    </header>
+
+    <div class="workspace-container" id="workspace-container">
+        <aside id="module-browser" class="position-left">
+            <h2 class="browser-header">Modules</h2>
+            <div class="module-list" id="module-list"></div>
+        </aside>
+        <main id="workspace">
+            <div id="canvas">
+                <svg id="cable-layer" xmlns="http://www.w3.org/2000/svg"></svg>
+            </div>
+            <div id="patch-hint" class="patch-hint"></div>
+        </main>
+    </div>
+
+    <div id="settings-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+        <div class="modal-content">
+            <button id="modal-close-btn" class="modal-close-btn" aria-label="Close">&times;</button>
+            <h2 class="modal-title" id="settings-title">Settings</h2>
+
+            <div class="settings-group">
+                <label for="master-volume" class="settings-label">Master Volume (<span id="master-volume-value">80</span>%)</label>
+                <input type="range" id="master-volume" min="0" max="100" value="80" class="settings-control">
+            </div>
+            <div class="settings-group">
+                <label class="settings-label">Theme</label>
+                <button id="theme-toggle" class="param-button settings-control">Toggle Dark Mode</button>
+            </div>
+            <div class="settings-group">
+                <label for="browser-position" class="settings-label">Module Browser Position</label>
+                <select id="browser-position" class="settings-control">
+                    <option value="left">Left</option>
+                    <option value="bottom">Bottom</option>
+                </select>
+            </div>
+            <div class="settings-group">
+                <label for="fine-tune-range" class="settings-label">Fine Tune Range</label>
+                <select id="fine-tune-range" class="settings-control">
+                    <option value="1">+/- 1%</option><option value="2">+/- 2%</option><option value="3">+/- 3%</option>
+                    <option value="5">+/- 5%</option><option value="8">+/- 8%</option><option value="10">+/- 10%</option>
+                    <option value="15">+/- 15%</option><option value="20">+/- 20%</option>
+                </select>
+            </div>
+            <div class="settings-group">
+                <label for="cable-opacity" class="settings-label">Cable Opacity (<span id="cable-opacity-value">85</span>%)</label>
+                <input type="range" id="cable-opacity" min="20" max="100" value="85" class="settings-control">
+            </div>
+
+            <p class="settings-hint">Hold <kbd>Shift</kbd> while dragging a slider for very fine adjustment. On touch screens, slide your finger away from the slider to slow it down. Double-tap a label to reset it.</p>
+
+            <div class="preset-buttons">
+                <button id="download-preset-btn" class="preset-btn">Download Preset</button>
+                <label for="upload-preset-input" class="preset-btn">Upload Preset</label>
+                <input type="file" id="upload-preset-input" accept=".json,.preset,application/json">
+            </div>
+            <div class="preset-buttons">
+                <button id="example-patch-btn" class="preset-btn secondary">Load Example</button>
+                <button id="clear-patch-btn" class="preset-btn danger">Clear Patch</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="node-sub-menu" role="menu"></div>
+    <div id="cable-gain-popup" class="cable-gain-popup"></div>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+</body>
+</html>
