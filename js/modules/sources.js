@@ -239,14 +239,13 @@ registerModule({
             keyEls[s] = k;
             keysEl.append(k);
         }
-        const down = button('−'), up = button('+'), edit = button('Edit Scale');
-        down.title = 'Octave down'; up.title = 'Octave up';
+        const edit = button('Edit Scale');
         edit.title = 'Click keys to add or remove notes from the custom scale';
         const readout = el('strong', { text: '—' });
         const scaleInfo = el('span', { class: 'node-label' });
         m.content.append(keysEl,
             el('div', { class: 'info-row' }, el('span', { class: 'node-label', text: 'Note' }), readout),
-            el('div', { class: 'btn-row' }, down, up, edit));
+            el('div', { class: 'btn-row' }, edit));
         const grid = el('div', { class: 'two-col' });
         m.content.append(grid);
         m.select('scale', grid);
@@ -284,7 +283,7 @@ registerModule({
                 k.classList.toggle('down', stack.some((h) => h.semi === s));
             });
             edit.classList.toggle('active', editing);
-            edit.classList.toggle('hidden', m.params.scale !== 'custom');
+            edit.parentElement.classList.toggle('hidden', m.params.scale !== 'custom');
             m.controls.root && m.controls.root.el.classList.toggle('hidden', m.params.scale === 'chromatic' || m.params.scale === 'custom');
             const names = set ? [...set].sort((a, b) => ((a - root + 12) % 12) - ((b - root + 12) % 12)).map((pc) => NOTE_NAMES[pc]) : null;
             scaleInfo.textContent = !set ? 'All 12 notes' : set.size ? `Notes: ${names.join(' ')}` : 'No notes selected';
@@ -341,8 +340,6 @@ registerModule({
         const upH = (e) => { const a = active.get(e.pointerId); if (!a) return; api.release(a.code); active.delete(e.pointerId); };
         keysEl.addEventListener('pointerup', upH);
         keysEl.addEventListener('pointercancel', upH);
-        down.addEventListener('click', () => m.setParam('octave', Math.max(0, m.params.octave - 1)));
-        up.addEventListener('click', () => m.setParam('octave', Math.min(7, m.params.octave + 1)));
         edit.addEventListener('click', () => { editing = !editing; paint(); });
         keysModules.add(api);
         m.addOutput('pitch', 'Pitch', 'cv', pitch);
