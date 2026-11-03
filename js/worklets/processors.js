@@ -252,6 +252,310 @@ class CrushProcessor extends AudioWorkletProcessor {
     }
 }
 
+// --- Clock modifier: divide or multiply an incoming clock ---
+class ClockModProcessor extends AudioWorkletProcessor {
+    static get parameterDescriptors() {
+        return [
+            { name: 'ratio', defaultValue: 2, minValue: 1, maxValue: 32, automationRate: 'k-rate' },
+            { name: 'multiply', defaultValue: 0, minValue: 0, maxValue: 1, automationRate: 'k-rate' },
+        ];
+    }
+    constructor() {
+        super();
+        this.clk = new GateDetector(); this.rst = new GateDetector();
+        this.count = -1; this.since = 0; this.period = sampleRate * 0.5;
+        this.pos = 1e12; // samples since the current output cycle started
+        this.cycle = sampleRate * 0.5;
+    }
+    process(inputs, outputs, params) {
+        const out = outputs[0][0];
+        if (!out) return true;
+        const clk = inputs[0] && inputs[0][0], rst = inputs[1] && inputs[1][0];
+        const n = Math.max(1, Math.round(params.ratio[0]));
+        const mul = params.multiply[0] > 0.5;
+        for (let i = 0; i < out.length; i++) {
+            this.since++;
+            if (rst && this.rst.step(rst[i])) { this.count = -1; this.pos = 1e12; }
+            if (clk && this.clk.step(clk[i])) {
+                if (this.since > 16 && this.since < sampleRate * 8) this.period = this.since;
+                this.since = 0;
+                this.count = (this.count + 1) % n;
+                if (mul) { this.cycle = this.period / n; this.pos = 0; }
+                else if (this.count === 0) { this.cycle = this.period * n; this.pos = 0; }
+            }
+            let g = 0;
+            if (mul) {
+                // n evenly spaced pulses per input period, 50% duty
+                const k = Math.floor(this.pos / this.cycle);
+                g = k < n && (this.pos - k * this.cycle) < this.cycle * 0.5 ? 1 : 0;
+            } else g = this.pos < this.cycle * 0.5 ? 1 : 0;
+            this.pos++;
+            out[i] = g;
+        }
+        return true;
+    }
+}
+
+// --- Euclidean rhythm: clock + reset in, hit and off-beat gates out ---
+class EuclidProcessor extends AudioWorkletProcessor {
+    static get parameterDescriptors() {
+        return [
+            { name: 'steps', defaultValue: 16, minValue: 1, maxValue: 64, automationRate: 'k-rate' },
+            { name: 'fills', defaultValue: 4, minValue: 0, maxValue: 64, automationRate: 'k-rate' },
+            { name: 'rotate', defaultValue: 0, minValue: 0, maxValue: 63, automationRate: 'k-rate' },
+        ];
+    }
+    constructor() { super(); this.clk = new GateDetector(); this.rst = new GateDetector(); this.step = -1; this.hit = false; }
+    static isHit(i, n, k, r) { if (k <= 0) return false; if (k >= n) return true; const j = (i + n - (r % n)) % n; return (j * k) % n < k; }
+    process(inputs, outputs, params) {
+        const o1 = outputs[0] && outputs[0][0], o2 = outputs[1] && outputs[1][0];
+        const len = (o1 || o2 || []).length;
+        if (!len) return true;
+        const clk = inputs[0] && inputs[0][0], rst = inputs[1] && inputs[1][0];
+        const n = Math.max(1, Math.round(params.steps[0]));
+        const k = Math.round(params.fills[0]), r = Math.round(params.rotate[0]);
+        for (let i = 0; i < len; i++) {
+            if (rst && this.rst.step(rst[i])) { this.step = -1; this.port.postMessage(-1); }
+            if (clk && this.clk.step(clk[i])) {
+                this.step = (this.step + 1) % n;
+                this.hit = EuclidProcessor.isHit(this.step, n, k, r);
+                this.port.postMessage(this.step);
+            }
+            const high = this.clk.high && this.step >= 0;
+            if (o1) o1[i] = high && this.hit ? 1 : 0;
+            if (o2) o2[i] = high && !this.hit ? 1 : 0;
+        }
+        return true;
+    }
+}
+
+// --- Probability gate: each incoming gate passes to A with probability p, otherwise to B ---
+class ProbGateProcessor extends AudioWorkletProcessor {
+    static get parameterDescriptors() { return [{ name: 'prob', defaultValue: 0.5, minValue: 0, maxValue: 1, automationRate: 'a-rate' }]; }
+    constructor() { super(); this.g = new GateDetector(); this.pass = false; }
+    process(inputs, outputs, params) {
+        const a = outputs[0] && outputs[0][0], b = outputs[1] && outputs[1][0];
+        const len = (a || b || []).length;
+        if (!len) return true;
+        const inp = inputs[0] && inputs[0][0];
+        const p = params.prob;
+        for (let i = 0; i < len; i++) {
+            const x = inp ? inp[i] : 0;
+            if (this.g.step(x)) {
+                const pr = Math.min(1, Math.max(0, p.length > 1 ? p[i] : p[0]));
+                this.pass = Math.random() < pr;
+                this.port.postMessage(this.pass ? 1 : 0);
+            }
+            const h = this.g.high;
+            if (a) a[i] = h && this.pass ? 1 : 0;
+            if (b) b[i] = h && !this.pass ? 1 : 0;
+        }
+        return true;
+    }
+}
+
+// --- Trigger delay: each rising edge fires a gate of set length after a delay ---
+class TrigDelayProcessor extends AudioWorkletProcessor {
+    static get parameterDescriptors() {
+        return [
+            { name: 'delay', defaultValue: 0.1, minValue: 0, maxValue: 10, automationRate: 'a-rate' },
+            { name: 'length', defaultValue: 0.01, minValue: 0.001, maxValue: 5, automationRate: 'k-rate' },
+        ];
+    }
+    constructor() { super(); this.g = new GateDetector(); this.queue = []; this.t = 0; this.offAt = -1; }
+    process(inputs, outputs, params) {
+        const out = outputs[0][0];
+        if (!out) return true;
+        const inp = inputs[0] && inputs[0][0];
+        const d = params.delay, len = params.length[0] * sampleRate;
+        for (let i = 0; i < out.length; i++) {
+            this.t++;
+            if (inp && this.g.step(inp[i]) && this.queue.length < 256) {
+                const dl = Math.max(0, d.length > 1 ? d[i] : d[0]);
+                this.queue.push(this.t + dl * sampleRate);
+            }
+            while (this.queue.length && this.queue[0] <= this.t) { this.queue.shift(); this.offAt = this.t + len; this.gap = 24; }
+            // brief low gap so back-to-back pulses stay distinct
+            let g = this.t < this.offAt ? 1 : 0;
+            if (this.gap > 0) { this.gap--; g = 0; }
+            out[i] = g;
+        }
+        return true;
+    }
+}
+
+// --- Logic: AND, OR, XOR, NAND, NOR, XNOR, NOT A on two gates ---
+class LogicProcessor extends AudioWorkletProcessor {
+    static get parameterDescriptors() { return [{ name: 'op', defaultValue: 0, minValue: 0, maxValue: 6, automationRate: 'k-rate' }]; }
+    constructor() { super(); this.a = new GateDetector(); this.b = new GateDetector(); }
+    process(inputs, outputs, params) {
+        const o = outputs[0] && outputs[0][0], inv = outputs[1] && outputs[1][0];
+        const len = (o || inv || []).length;
+        if (!len) return true;
+        const A = inputs[0] && inputs[0][0], B = inputs[1] && inputs[1][0];
+        const op = Math.round(params.op[0]);
+        for (let i = 0; i < len; i++) {
+            this.a.step(A ? A[i] : 0); this.b.step(B ? B[i] : 0);
+            const a = this.a.high, b = this.b.high;
+            let r;
+            switch (op) {
+                case 1: r = a || b; break;
+                case 2: r = a !== b; break;
+                case 3: r = !(a && b); break;
+                case 4: r = !(a || b); break;
+                case 5: r = a === b; break;
+                case 6: r = !a; break;
+                default: r = a && b;
+            }
+            if (o) o[i] = r ? 1 : 0;
+            if (inv) inv[i] = r ? 0 : 1;
+        }
+        return true;
+    }
+}
+
+// --- Comparator with hysteresis: gate high while input > threshold ---
+class ComparatorProcessor extends AudioWorkletProcessor {
+    static get parameterDescriptors() {
+        return [
+            { name: 'threshold', defaultValue: 0, minValue: -10, maxValue: 10, automationRate: 'a-rate' },
+            { name: 'hysteresis', defaultValue: 0.02, minValue: 0, maxValue: 1, automationRate: 'k-rate' },
+        ];
+    }
+    constructor() { super(); this.high = false; this.blocks = 0; }
+    process(inputs, outputs, params) {
+        const o = outputs[0] && outputs[0][0], inv = outputs[1] && outputs[1][0];
+        const len = (o || inv || []).length;
+        if (!len) return true;
+        const x = inputs[0] && inputs[0][0];
+        const th = params.threshold, h = params.hysteresis[0] / 2;
+        for (let i = 0; i < len; i++) {
+            const v = x ? x[i] : 0, t = th.length > 1 ? th[i] : th[0];
+            if (!this.high && v > t + h) this.high = true;
+            else if (this.high && v < t - h) this.high = false;
+            if (o) o[i] = this.high ? 1 : 0;
+            if (inv) inv[i] = this.high ? 0 : 1;
+        }
+        if (++this.blocks >= 8) { this.blocks = 0; this.port.postMessage(this.high ? 1 : 0); }
+        return true;
+    }
+}
+
+// --- Math: two inputs, one operation, then scale/offset and optional slew ---
+class MathProcessor extends AudioWorkletProcessor {
+    static get parameterDescriptors() {
+        return [
+            { name: 'op', defaultValue: 0, minValue: 0, maxValue: 9, automationRate: 'k-rate' },
+            { name: 'scale', defaultValue: 1, minValue: -100, maxValue: 100, automationRate: 'a-rate' },
+            { name: 'offset', defaultValue: 0, minValue: -100, maxValue: 100, automationRate: 'a-rate' },
+            { name: 'rise', defaultValue: 0, minValue: 0, maxValue: 30, automationRate: 'k-rate' },
+            { name: 'fall', defaultValue: 0, minValue: 0, maxValue: 30, automationRate: 'k-rate' },
+        ];
+    }
+    constructor() { super(); this.y = 0; this.sh = 0; this.g = new GateDetector(); this.blocks = 0; }
+    process(inputs, outputs, params) {
+        const out = outputs[0][0];
+        if (!out) return true;
+        const A = inputs[0] && inputs[0][0], B = inputs[1] && inputs[1][0];
+        const op = Math.round(params.op[0]);
+        const sc = params.scale, of = params.offset;
+        // Slew: time to move one unit
+        const rise = params.rise[0], fall = params.fall[0];
+        const up = rise > 0 ? 1 / (rise * sampleRate) : Infinity, dn = fall > 0 ? 1 / (fall * sampleRate) : Infinity;
+        for (let i = 0; i < out.length; i++) {
+            const a = A ? A[i] : 0, b = B ? B[i] : 0;
+            let r;
+            switch (op) {
+                case 1: r = a - b; break;
+                case 2: r = a * (B ? b : 1); break;
+                case 3: r = Math.min(a, B ? b : a); break;
+                case 4: r = Math.max(a, B ? b : a); break;
+                case 5: r = Math.abs(a); break;
+                case 6: r = -a; break;
+                case 7: if (this.g.step(b)) this.sh = a; r = this.sh; break; // sample & hold A when B gates
+                case 8: r = Math.round(a * 12) / 12; break;              // quantise to semitones (1V/oct)
+                case 9: r = a > 0 ? a : 0; break;                         // half-wave rectify
+                default: r = a + b;
+            }
+            r = r * (sc.length > 1 ? sc[i] : sc[0]) + (of.length > 1 ? of[i] : of[0]);
+            const d = r - this.y;
+            this.y += d > 0 ? Math.min(d, up) : Math.max(d, -dn);
+            out[i] = this.y;
+        }
+        if (++this.blocks >= 8) { this.blocks = 0; this.port.postMessage(this.y); }
+        return true;
+    }
+}
+
+// --- Envelope follower: rectify and smooth into a CV ---
+class FollowerProcessor extends AudioWorkletProcessor {
+    static get parameterDescriptors() {
+        return [
+            { name: 'attack', defaultValue: 0.01, minValue: 0.0001, maxValue: 2, automationRate: 'k-rate' },
+            { name: 'release', defaultValue: 0.2, minValue: 0.001, maxValue: 5, automationRate: 'k-rate' },
+        ];
+    }
+    constructor() { super(); this.env = 0; this.blocks = 0; }
+    process(inputs, outputs, params) {
+        const out = outputs[0][0];
+        if (!out) return true;
+        const inp = inputs[0];
+        const a = 1 - Math.exp(-1 / (params.attack[0] * sampleRate));
+        const r = 1 - Math.exp(-1 / (params.release[0] * sampleRate));
+        for (let i = 0; i < out.length; i++) {
+            let x = 0;
+            if (inp) for (let c = 0; c < inp.length; c++) x = Math.max(x, Math.abs(inp[c][i]));
+            this.env += (x - this.env) * (x > this.env ? a : r);
+            out[i] = this.env;
+        }
+        if (++this.blocks >= 8) { this.blocks = 0; this.port.postMessage(this.env); }
+        return true;
+    }
+}
+
+// --- Clock quantiser: an incoming gate is delayed to the next clock pulse ---
+class ClockQuantProcessor extends AudioWorkletProcessor {
+    constructor() { super(); this.g = new GateDetector(); this.c = new GateDetector(); this.armed = false; this.firing = false; }
+    process(inputs, outputs) {
+        const out = outputs[0][0];
+        if (!out) return true;
+        const gate = inputs[0] && inputs[0][0], clk = inputs[1] && inputs[1][0];
+        for (let i = 0; i < out.length; i++) {
+            if (gate && this.g.step(gate[i])) this.armed = true;
+            const edge = clk ? this.c.step(clk[i]) : false;
+            if (edge) { this.firing = this.armed; this.armed = false; }
+            if (this.firing && !this.c.high) this.firing = false;
+            out[i] = this.firing ? 1 : 0;
+        }
+        return true;
+    }
+}
+
+// --- Edge reporter: tells the main thread about gate rises and falls ---
+class EdgeProcessor extends AudioWorkletProcessor {
+    constructor() { super(); this.g = new GateDetector(); }
+    process(inputs) {
+        const x = inputs[0] && inputs[0][0];
+        if (!x) return true;
+        for (let i = 0; i < x.length; i++) {
+            const was = this.g.high;
+            if (this.g.step(x[i])) this.port.postMessage({ on: true, t: currentTime + i / sampleRate });
+            else if (was && !this.g.high) this.port.postMessage({ on: false, t: currentTime + i / sampleRate });
+        }
+        return true;
+    }
+}
+
+registerProcessor('ma-clockmod', ClockModProcessor);
+registerProcessor('ma-euclid', EuclidProcessor);
+registerProcessor('ma-probgate', ProbGateProcessor);
+registerProcessor('ma-trigdelay', TrigDelayProcessor);
+registerProcessor('ma-logic', LogicProcessor);
+registerProcessor('ma-comparator', ComparatorProcessor);
+registerProcessor('ma-math', MathProcessor);
+registerProcessor('ma-follower', FollowerProcessor);
+registerProcessor('ma-clockquant', ClockQuantProcessor);
+registerProcessor('ma-edge', EdgeProcessor);
 registerProcessor('ma-crush', CrushProcessor);
 registerProcessor('ma-lfo', LfoProcessor);
 registerProcessor('ma-adsr', AdsrProcessor);

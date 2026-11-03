@@ -10,11 +10,12 @@ import './modules/sources.js';
 import './modules/shaping.js';
 import './modules/effects.js';
 import './modules/fx.js';
+import './modules/batch3.js';
 import './modules/sequencing.js';
 import './modules/utility.js';
 
 const PATCH_KEY = 'modularaudio.patch';
-const CATEGORY_ORDER = ['Sources', 'Modulation', 'Processors', 'Effects', 'Dynamics & EQ', 'Distortion', 'Sequencing', 'Utilities'];
+const CATEGORY_ORDER = ['Sources', 'Modulation', 'Processors', 'Effects', 'Dynamics & EQ', 'Distortion', 'Sequencing', 'Logic & CV', 'Utilities'];
 const $ = (id) => document.getElementById(id);
 
 const isMobile = () => window.matchMedia('(max-width: 767px)').matches;
