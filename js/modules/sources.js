@@ -1,6 +1,7 @@
 // Sound and control sources: Oscillator, LFO, Noise, Keys.
 import { registerModule } from '../patch.js';
 import { el, formatFrequency, formatDb, dbToGain, NOTE_NAMES, midiToName, typingInField } from '../util.js';
+import { PITCH_PARAMS } from '../controls.js';
 
 // Cached custom waveforms per context
 const waveCache = new WeakMap();
@@ -19,11 +20,7 @@ registerModule({
     type: 'oscillator', title: 'Oscillator', category: 'Sources', blurb: 'Pitched waveform, 1V/oct pitch, FM',
     width: 210,
     params: {
-        mode: { default: 'note' },
-        freq: { default: 220 },
-        fine: { default: 0 },
-        note: { default: 'A' },
-        octave: { default: 3 },
+        ...PITCH_PARAMS,
         wave: { label: 'Waveform', default: 'sawtooth', options: [
             { value: 'sine', label: 'Sine' }, { value: 'triangle', label: 'Triangle' }, { value: 'sawtooth', label: 'Sawtooth' },
             { value: 'revsaw', label: 'Rev Saw' }, { value: 'square', label: 'Square' }] },
@@ -48,12 +45,12 @@ registerModule({
         m.addOutput('out', 'Out', 'audio', out);
         return {
             update(key, v) {
-                if (['mode', 'freq', 'fine', 'note', 'octave'].includes(key)) m.set(osc.frequency, p.frequency(), 0.01);
+                if (['mode', 'freq', 'fine', 'note', 'octave'].includes(key)) m.set(osc.frequency, Math.min(ctx.sampleRate / 2 - 1, p.frequency()), 0.01);
                 if (key === 'wave') { if (v === 'revsaw') osc.setPeriodicWave(revSaw(ctx)); else osc.type = v; }
                 if (key === 'level') m.set(out.gain, dbToGain(v));
                 if (key === 'fm') m.set(fm.gain, v);
             },
-            refresh() { m.set(osc.frequency, p.frequency(), 0); },
+            refresh() { m.set(osc.frequency, Math.min(ctx.sampleRate / 2 - 1, p.frequency()), 0); },
             dispose() { try { osc.stop(); } catch (e) {} },
         };
     },
@@ -70,7 +67,7 @@ registerModule({
         polarity: { label: 'Range', default: 'bi', options: [{ value: 'bi', label: 'Bipolar (−1…+1)' }, { value: 'uni', label: 'Unipolar (0…1)' }] },
     },
     create(m, ctx) {
-        const node = new AudioWorkletNode(ctx, 'ma-lfo', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] });
+        const node = m.worklet('ma-lfo', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] });
         const depth = ctx.createGain();
         node.connect(depth);
         const led = el('span', { class: 'led' });

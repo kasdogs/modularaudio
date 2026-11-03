@@ -236,6 +236,15 @@ export function selectControl(m, spec) {
     };
 }
 
+// Parameter specs shared by modules that use pitchControl (ranges let presets be sanitised).
+export const PITCH_PARAMS = {
+    mode: { default: 'note', options: [{ value: 'free', label: 'Free' }, { value: 'note', label: 'Note' }] },
+    freq: { default: 220, min: 10, max: 20000 },
+    fine: { default: 0, min: -1, max: 1 },
+    note: { default: 'A', options: NOTE_NAMES.map((n) => ({ value: n, label: n })) },
+    octave: { default: 3, min: -1, max: 9, step: 1 },
+};
+
 // --- Pitch control: free (coarse + fine) or note (note + octave), fine applies to both ---
 export function pitchControl(m, opts) {
     const { min, max } = opts;

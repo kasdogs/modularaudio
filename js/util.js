@@ -75,3 +75,12 @@ export function typingInField() {
 
 // Set a .meter-fill element to a 0..1 level.
 export function setMeter(fill, v) { fill.style.setProperty('--v', String(Math.max(0, Math.min(1, v)))); }
+
+// Cached CSS custom properties for per-frame drawing (cleared when the theme changes).
+const cssCache = new Map();
+export function cssVar(name) {
+    let v = cssCache.get(name);
+    if (v === undefined) { v = getComputedStyle(document.documentElement).getPropertyValue(name).trim(); cssCache.set(name, v); }
+    return v;
+}
+export function clearCssCache() { cssCache.clear(); }

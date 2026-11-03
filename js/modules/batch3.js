@@ -1,13 +1,14 @@
 // Third batch ported from the earlier prototype: Sampler, FM Operator, clock and gate tools,
 // Logic, Comparator, Math, Envelope Follower, DC Blocker, Stereo Utility, Tuner, Spectrum.
 import { registerModule } from '../patch.js';
-import { el, clamp, formatFrequency, formatTime, formatPercent, formatDb, dbToGain, setMeter, toast, nearestNote, freqToMidi, midiToName } from '../util.js';
+import { el, clamp, formatFrequency, formatTime, formatPercent, formatDb, dbToGain, setMeter, toast, nearestNote, freqToMidi, midiToName, cssVar } from '../util.js';
+import { PITCH_PARAMS } from '../controls.js';
 
 const stop = (e) => e.stopPropagation();
 const button = (text) => { const b = el('button', { class: 'param-button', type: 'button', text }); b.addEventListener('pointerdown', stop); return b; };
 const led = () => el('span', { class: 'led' });
 function blink(l, ms = 60) { l.classList.add('on'); clearTimeout(l._t); l._t = setTimeout(() => l.classList.remove('on'), ms); }
-function css(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+const css = (name) => cssVar(name);
 
 // ---------------------------------------------------------------- Sampler
 // Built-in one-shots so the module makes sound before any file is loaded.
@@ -51,7 +52,7 @@ registerModule({
         const pitchSum = ctx.createConstantSource(); pitchSum.offset.value = 1; pitchSum.start(); // ×tune gain = Tune in cents
         const tune = ctx.createGain(); tune.gain.value = 0;
         pitchSum.connect(tune);
-        const edge = new AudioWorkletNode(ctx, 'ma-edge', { numberOfInputs: 1, numberOfOutputs: 0 });
+        const edge = m.worklet('ma-edge', { numberOfInputs: 1, numberOfOutputs: 0 });
         const manual = ctx.createConstantSource(); manual.offset.value = 0; manual.start(); manual.connect(edge);
         const fileIn = el('input', { type: 'file', accept: 'audio/*,.wav,.aiff,.flac,.mp3,.ogg', style: { display: 'none' } });
         const canvas = el('canvas', { class: 'display', width: 412, height: 120, style: { height: '60px' } });
@@ -156,7 +157,7 @@ registerModule({
 registerModule({
     type: 'fmop', title: 'FM Operator', category: 'Sources', blurb: 'Two-operator FM voice', width: 210,
     params: {
-        mode: { default: 'note' }, freq: { default: 220 }, fine: { default: 0 }, note: { default: 'A' }, octave: { default: 3 },
+        ...PITCH_PARAMS,
         ratio: { label: 'Mod Ratio', min: 0.25, max: 16, curve: 'log', default: 2, format: (v) => `×${v.toFixed(3)}` },
         index: { label: 'FM Index', min: 0, max: 20, curve: 2, default: 2, format: (v) => v.toFixed(2) },
         cwave: { label: 'Carrier Wave', default: 'sine', options: [{ value: 'sine', label: 'Sine' }, { value: 'triangle', label: 'Triangle' }, { value: 'square', label: 'Square' }, { value: 'sawtooth', label: 'Sawtooth' }] },
@@ -179,7 +180,8 @@ registerModule({
         m.select('cwave'); m.select('mwave'); m.slider('level');
         // Deviation (Hz) = index × modulator frequency.
         const apply = () => {
-            const f = p.frequency(), mf = f * m.params.ratio;
+            const ny = ctx.sampleRate / 2 - 1;
+            const f = Math.min(ny, p.frequency()), mf = Math.min(ny, f * m.params.ratio);
             m.set(car.frequency, f, 0.01);
             m.set(mod.frequency, mf, 0.01);
             m.set(depth.gain, m.params.index * mf);
@@ -210,7 +212,7 @@ registerModule({
         ratio: { label: 'Factor', min: 1, max: 32, default: 2, step: 1, format: (v) => `${v}` },
     },
     create(m, ctx) {
-        const node = new AudioWorkletNode(ctx, 'ma-clockmod', { numberOfInputs: 2, numberOfOutputs: 1, outputChannelCount: [1] });
+        const node = m.worklet('ma-clockmod', { numberOfInputs: 2, numberOfOutputs: 1, outputChannelCount: [1] });
         const label = el('span', { class: 'node-label' });
         m.select('mode'); m.slider('ratio');
         m.content.append(el('div', { class: 'info-row' }, label));
@@ -232,7 +234,7 @@ registerModule({
     type: 'clockquant', title: 'Clock Quantizer', category: 'Sequencing', blurb: 'Snaps gates to the next clock pulse',
     params: {},
     create(m, ctx) {
-        const node = new AudioWorkletNode(ctx, 'ma-clockquant', { numberOfInputs: 2, numberOfOutputs: 1, outputChannelCount: [1] });
+        const node = m.worklet('ma-clockquant', { numberOfInputs: 2, numberOfOutputs: 1, outputChannelCount: [1] });
         m.content.append(el('div', { class: 'info-row' }, el('span', { class: 'node-label', text: 'Gates wait for the next clock' })));
         m.addInput('gate', 'Gate', 'gate', node, { index: 0 });
         m.addInput('clock', 'Clock', 'gate', node, { index: 1 });
@@ -249,7 +251,7 @@ registerModule({
         rotate: { label: 'Rotate', min: 0, max: 31, default: 0, step: 1, format: (v) => `${v}` },
     },
     create(m, ctx) {
-        const node = new AudioWorkletNode(ctx, 'ma-euclid', { numberOfInputs: 2, numberOfOutputs: 2, outputChannelCount: [1, 1] });
+        const node = m.worklet('ma-euclid', { numberOfInputs: 2, numberOfOutputs: 2, outputChannelCount: [1, 1] });
         const canvas = el('canvas', { class: 'display', width: 392, height: 200, style: { height: '100px' } });
         m.content.append(canvas);
         ['steps', 'fills', 'rotate'].forEach((k) => m.slider(k));
@@ -291,7 +293,7 @@ registerModule({
     type: 'probgate', title: 'Prob Gate', category: 'Sequencing', blurb: 'Lets each gate through by chance',
     params: { prob: { label: 'Probability', min: 0, max: 1, default: 0.5, format: formatPercent, unit: 'ratio' } },
     create(m, ctx) {
-        const node = new AudioWorkletNode(ctx, 'ma-probgate', { numberOfInputs: 1, numberOfOutputs: 2, outputChannelCount: [1, 1] });
+        const node = m.worklet('ma-probgate', { numberOfInputs: 1, numberOfOutputs: 2, outputChannelCount: [1, 1] });
         const probCv = ctx.createGain(); probCv.gain.value = 0.5; // 1 unit = +50%
         probCv.connect(node.parameters.get('prob'));
         const la = led(), lb = led();
@@ -313,7 +315,7 @@ registerModule({
         length: { label: 'Gate Length', min: 0.001, max: 1, curve: 'log', default: 0.02, format: formatTime, unit: 's' },
     },
     create(m, ctx) {
-        const node = new AudioWorkletNode(ctx, 'ma-trigdelay', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] });
+        const node = m.worklet('ma-trigdelay', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] });
         const delayCv = ctx.createGain(); delayCv.gain.value = 0.1; // 1 unit = +100 ms
         delayCv.connect(node.parameters.get('delay'));
         m.slider('delay'); m.slider('length');
@@ -355,7 +357,7 @@ registerModule({
     type: 'logic', title: 'Logic', category: 'Logic & CV', blurb: 'AND, OR, XOR and friends on gates',
     params: { op: { label: 'Operation', default: 0, options: ['AND', 'OR', 'XOR', 'NAND', 'NOR', 'XNOR', 'NOT A'].map((label, value) => ({ value, label })) } },
     create(m, ctx) {
-        const node = new AudioWorkletNode(ctx, 'ma-logic', { numberOfInputs: 2, numberOfOutputs: 2, outputChannelCount: [1, 1] });
+        const node = m.worklet('ma-logic', { numberOfInputs: 2, numberOfOutputs: 2, outputChannelCount: [1, 1] });
         m.select('op');
         m.addInput('a', 'A', 'gate', node, { index: 0 });
         m.addInput('b', 'B', 'gate', node, { index: 1 });
@@ -372,7 +374,7 @@ registerModule({
         hysteresis: { label: 'Hysteresis', min: 0, max: 0.5, curve: 2, default: 0.02, format: (v) => v.toFixed(3) },
     },
     create(m, ctx) {
-        const node = new AudioWorkletNode(ctx, 'ma-comparator', { numberOfInputs: 1, numberOfOutputs: 2, outputChannelCount: [1, 1] });
+        const node = m.worklet('ma-comparator', { numberOfInputs: 1, numberOfOutputs: 2, outputChannelCount: [1, 1] });
         const l = led();
         m.slider('threshold'); m.slider('hysteresis');
         m.content.append(el('div', { class: 'info-row' }, el('span', { class: 'node-label', text: 'State' }), l));
@@ -399,7 +401,7 @@ registerModule({
         fall: { label: 'Slew Down', min: 0, max: 5, curve: 3, default: 0, format: (v) => (v < 0.0005 ? 'Off' : formatTime(v)), unit: 's' },
     },
     create(m, ctx) {
-        const node = new AudioWorkletNode(ctx, 'ma-math', { numberOfInputs: 2, numberOfOutputs: 1, outputChannelCount: [1] });
+        const node = m.worklet('ma-math', { numberOfInputs: 2, numberOfOutputs: 1, outputChannelCount: [1] });
         const readout = el('span', { class: 'node-label', text: '0.000' });
         m.select('op');
         ['scale', 'offset', 'rise', 'fall'].forEach((k) => m.slider(k));
@@ -430,7 +432,7 @@ registerModule({
         offset: { label: 'Offset', min: -1, max: 1, default: 0, format: (v) => `${v >= 0 ? '+' : ''}${v.toFixed(2)}` },
     },
     create(m, ctx) {
-        const node = new AudioWorkletNode(ctx, 'ma-follower', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] });
+        const node = m.worklet('ma-follower', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] });
         const gain = ctx.createGain(), off = ctx.createConstantSource(), out = ctx.createGain();
         off.start();
         node.connect(gain).connect(out);

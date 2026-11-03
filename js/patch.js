@@ -7,6 +7,24 @@ export const registry = new Map(); // type -> module definition
 export function registerModule(def) { registry.set(def.type, def); }
 
 let nextId = 1;
+
+// Coerce a stored value to what the parameter spec allows (bad presets must never break a module).
+export function sanitize(spec, v) {
+    const d = spec.default;
+    if (v === undefined || v === null) return d;
+    if (spec.options) {
+        const hit = spec.options.find((o) => String(o.value) === String(v));
+        return hit ? hit.value : d;
+    }
+    if (Array.isArray(d)) return Array.isArray(v) ? v : d;
+    if (typeof d === 'number') {
+        const n = Number(v);
+        if (!Number.isFinite(n)) return d;
+        return typeof spec.min === 'number' ? Math.min(spec.max, Math.max(spec.min, n)) : n;
+    }
+    if (typeof d === 'string') return typeof v === 'string' ? v : d;
+    return v;
+}
 let nextConnId = 1;
 
 export class Module {
@@ -17,13 +35,15 @@ export class Module {
         this.id = state.id || `${def.type}-${nextId++}`;
         const n = parseInt(String(this.id).split('-').pop(), 10);
         if (Number.isFinite(n)) nextId = Math.max(nextId, n + 1);
-        this.x = state.x ?? 40;
-        this.y = state.y ?? 40;
+        this.x = Number.isFinite(state.x) ? state.x : 40;
+        this.y = Number.isFinite(state.y) ? state.y : 40;
         this.minimized = !!state.minimized;
         this.params = {};
         for (const [k, spec] of Object.entries(def.params || {})) this.params[k] = spec.default;
-        if (state.params) for (const [k, v] of Object.entries(state.params)) if (k in this.params) this.params[k] = v;
-        this.locks = new Set(state.locks || []);
+        if (state.params && typeof state.params === 'object') for (const [k, v] of Object.entries(state.params)) if (k in this.params) this.params[k] = sanitize(def.params[k], v);
+        this.locks = new Set(Array.isArray(state.locks) ? state.locks : []);
+        this.worklets = [];
+        this.visible = true;
         this.inputs = {};   // name -> { name, label, kind, target, index, conns:Set, onConnect }
         this.outputs = {};  // name -> { name, label, kind, node, index, conns:Set }
         this.controls = {}; // key -> { set, lock }
@@ -144,9 +164,24 @@ export class Module {
         if (this.pitchUi) this.pitchUi.refresh();
         if (this.impl.refresh) this.impl.refresh();
     }
-    // Animation loop helper for displays; stops automatically on dispose.
+    // Create an AudioWorkletNode that is retired automatically when the module is deleted.
+    worklet(name, opts) {
+        const n = new AudioWorkletNode(audio.ctx, name, opts);
+        this.worklets.push(n);
+        return n;
+    }
+    // Animation loop for displays: skipped while minimised, off-screen or in a hidden tab; stops on dispose.
     animate(fn) {
-        const loop = () => { fn(); this.raf = requestAnimationFrame(loop); };
+        let frame = 0;
+        const loop = () => {
+            this.raf = requestAnimationFrame(loop);
+            if (frame++ % 15 === 0) {
+                const r = this.element.getBoundingClientRect();
+                this.visible = r.right > 0 && r.bottom > 0 && r.left < innerWidth && r.top < innerHeight;
+            }
+            if (document.hidden || this.minimized || !this.visible) return;
+            fn();
+        };
         this.raf = requestAnimationFrame(loop);
     }
     // Smooth AudioParam helper exposed to modules.
@@ -160,6 +195,9 @@ export class Module {
         if (this.raf) cancelAnimationFrame(this.raf);
         this.timers.forEach(clearInterval);
         try { this.impl.dispose && this.impl.dispose(); } catch (e) { console.warn(e); }
+        for (const w of this.worklets) {
+            try { w.port.postMessage('__dispose'); w.port.onmessage = null; w.disconnect(); } catch (e) {}
+        }
         for (const p of [...Object.values(this.outputs)]) {
             try { p.node.disconnect(); } catch (e) {}
         }
@@ -182,6 +220,7 @@ export class Patch {
         const def = registry.get(type);
         if (!def) { console.warn(`Unknown module type: ${type}`); return null; }
         if (def.singleton && [...this.modules.values()].some((m) => m.type === type)) return [...this.modules.values()].find((m) => m.type === type);
+        if (state.id && this.modules.has(state.id)) state = { ...state, id: undefined }; // duplicate id in a preset
         const m = new Module(def, this, state);
         this.modules.set(m.id, m);
         this.canvas.append(m.element);
@@ -210,18 +249,24 @@ export class Patch {
         const from = a.dir === 'out' ? a : b, to = a.dir === 'out' ? b : a;
         const op = from.mod.outputs[from.port], ip = to.mod.inputs[to.port];
         if (!op || !ip) return null;
+        if (!Number.isFinite(gain)) gain = 1;
         const g = audio.ctx.createGain();
         g.gain.value = gain;
+        // A cable that closes a loop gets a DelayNode: Web Audio requires one in every cycle,
+        // and browsers that follow the spec strictly (e.g. Firefox) silence loops without it.
+        const feedback = this.reaches(to.mod, from.mod);
+        let last = g;
+        if (feedback) { last = audio.ctx.createDelay(0.01); last.delayTime.value = 0; g.connect(last); }
         try {
             op.node.connect(g, op.index);
-            if (ip.target instanceof AudioParam) g.connect(ip.target);
-            else g.connect(ip.target, 0, ip.index);
+            if (ip.target instanceof AudioParam) last.connect(ip.target);
+            else last.connect(ip.target, 0, ip.index);
         } catch (e) {
             console.warn('Connection failed', e);
             try { g.disconnect(); } catch (_) {}
             return null;
         }
-        const conn = { id: id || `c${nextConnId++}`, from: { mod: from.mod, port: from.port }, to: { mod: to.mod, port: to.port }, gain, gainNode: g, kind: op.kind };
+        const conn = { id: id || `c${nextConnId++}`, from: { mod: from.mod, port: from.port }, to: { mod: to.mod, port: to.port }, gain, gainNode: g, delayNode: last !== g ? last : null, feedback, kind: op.kind };
         const n = parseInt(String(conn.id).slice(1), 10);
         if (Number.isFinite(n)) nextConnId = Math.max(nextConnId, n + 1);
         this.connections.set(conn.id, conn);
@@ -231,12 +276,28 @@ export class Patch {
         this.changed('structure');
         return conn;
     }
+    // Is there a cable path from module a to module b?
+    reaches(a, b) {
+        if (a === b) return true;
+        const seen = new Set([a]), stack = [a];
+        while (stack.length) {
+            const m = stack.pop();
+            for (const c of this.connections.values()) {
+                if (c.from.mod !== m || seen.has(c.to.mod)) continue;
+                if (c.to.mod === b) return true;
+                seen.add(c.to.mod);
+                stack.push(c.to.mod);
+            }
+        }
+        return false;
+    }
     disconnect(id, notify = true) {
         const c = this.connections.get(id);
         if (!c) return;
         const op = c.from.mod.outputs[c.from.port], ip = c.to.mod.inputs[c.to.port];
         try { op.node.disconnect(c.gainNode, op.index); } catch (e) {}
         try { c.gainNode.disconnect(); } catch (e) {}
+        try { c.delayNode && c.delayNode.disconnect(); } catch (e) {}
         op.conns.delete(id);
         ip.conns.delete(id);
         this.connections.delete(id);
@@ -274,37 +335,50 @@ export class Patch {
         };
     }
     load(data) {
-        if (!data || !Array.isArray(data.modules)) throw new Error('Not a Modular Audio preset.');
+        if (!data || typeof data !== 'object' || !Array.isArray(data.modules)) throw new Error('Not a Modular Audio preset.');
+        const depth = this.suspendEvents;
         this.suspendEvents++;
+        const skipped = [];
         try {
             this.clear();
-            this.suspendEvents++;
             for (const s of data.modules) {
-                const existing = registry.get(s.type)?.deletable === false ? [...this.modules.values()].find((m) => m.type === s.type) : null;
-                if (existing) {
-                    // Keep the permanent module but move it and restore its settings under the saved id.
-                    this.modules.delete(existing.id);
-                    existing.id = s.id;
-                    existing.element.dataset.moduleId = s.id;
-                    Object.values(existing.inputs).concat(Object.values(existing.outputs)).forEach((p) => p.el && (p.el.dataset.moduleId = s.id));
-                    this.modules.set(s.id, existing);
-                    existing.setPosition(s.x ?? existing.x, s.y ?? existing.y);
-                    if (s.params) for (const [k, v] of Object.entries(s.params)) if (k in existing.params) { existing.params[k] = v; existing.applyParam(k); }
-                    existing.locks = new Set(s.locks || []);
-                    existing.refreshControls();
-                } else {
-                    this.addModule(s.type, s);
+                if (!s || typeof s !== 'object' || !registry.has(s.type)) { skipped.push(s && s.type); continue; }
+                try {
+                    const def = registry.get(s.type);
+                    const existing = def.deletable === false ? [...this.modules.values()].find((m) => m.type === s.type) : null;
+                    if (existing) this.restoreInto(existing, s);
+                    else this.addModule(s.type, s);
+                } catch (e) {
+                    console.warn(`Could not restore ${s.type}`, e);
+                    skipped.push(s.type);
                 }
             }
-            for (const c of data.connections || []) {
+            for (const c of Array.isArray(data.connections) ? data.connections : []) {
+                if (!c || !Array.isArray(c.from) || !Array.isArray(c.to)) continue;
                 const a = this.modules.get(c.from[0]), b = this.modules.get(c.to[0]);
                 if (!a || !b) continue;
-                this.connect({ mod: a, port: c.from[1], dir: 'out' }, { mod: b, port: c.to[1], dir: 'in' }, c.gain ?? 1);
+                this.connect({ mod: a, port: c.from[1], dir: 'out' }, { mod: b, port: c.to[1], dir: 'in' }, Number(c.gain ?? 1));
             }
-            this.suspendEvents--;
         } finally {
-            this.suspendEvents--;
+            // Always restore event delivery, even if something above threw.
+            this.suspendEvents = depth;
         }
         this.changed('structure');
+        return { skipped: skipped.filter(Boolean) };
+    }
+    // Keep a permanent module (Output) but move it and restore its settings under the saved id.
+    restoreInto(existing, s) {
+        const id = typeof s.id === 'string' ? s.id : existing.id;
+        this.modules.delete(existing.id);
+        existing.id = id;
+        existing.element.dataset.moduleId = id;
+        Object.values(existing.inputs).concat(Object.values(existing.outputs)).forEach((p) => p.el && (p.el.dataset.moduleId = id));
+        this.modules.set(id, existing);
+        existing.setPosition(Number.isFinite(s.x) ? s.x : existing.x, Number.isFinite(s.y) ? s.y : existing.y);
+        if (s.params && typeof s.params === 'object') {
+            for (const [k, v] of Object.entries(s.params)) if (k in existing.params) { existing.params[k] = sanitize(existing.def.params[k], v); existing.applyParam(k); }
+        }
+        existing.locks = new Set(Array.isArray(s.locks) ? s.locks : []);
+        existing.refreshControls();
     }
 }

@@ -4,6 +4,18 @@
 const GATE_HIGH = 0.5;
 const GATE_LOW = 0.25;
 
+// Base class: lets the main thread retire a processor so deleted modules stop using CPU.
+class Base extends AudioWorkletProcessor {
+    constructor() {
+        super();
+        this.alive = true;
+        this.port.onmessage = (e) => {
+            if (e.data === '__dispose') { this.alive = false; return; }
+            if (this.onMessage) this.onMessage(e);
+        };
+    }
+}
+
 class GateDetector {
     constructor() { this.high = false; }
     // Returns true on a rising edge.
@@ -15,7 +27,7 @@ class GateDetector {
 }
 
 // --- LFO: sine, triangle, saw, ramp, square, sample & hold ---
-class LfoProcessor extends AudioWorkletProcessor {
+class LfoProcessor extends Base {
     static get parameterDescriptors() {
         return [
             { name: 'rate', defaultValue: 1, minValue: 0.0001, maxValue: 2000, automationRate: 'a-rate' },
@@ -33,6 +45,7 @@ class LfoProcessor extends AudioWorkletProcessor {
         this.last = 0;
     }
     process(inputs, outputs, params) {
+        if (!this.alive) return false;
         const out = outputs[0][0];
         if (!out) return true;
         const resetIn = inputs[0] && inputs[0][0];
@@ -65,7 +78,7 @@ class LfoProcessor extends AudioWorkletProcessor {
 }
 
 // --- ADSR envelope with gate input ---
-class AdsrProcessor extends AudioWorkletProcessor {
+class AdsrProcessor extends Base {
     static get parameterDescriptors() {
         return [
             { name: 'attack', defaultValue: 0.01, minValue: 0.0005, maxValue: 30, automationRate: 'k-rate' },
@@ -82,6 +95,7 @@ class AdsrProcessor extends AudioWorkletProcessor {
         this.blocks = 0;
     }
     process(inputs, outputs, params) {
+        if (!this.alive) return false;
         const out = outputs[0][0];
         if (!out) return true;
         const gateIn = inputs[0] && inputs[0][0];
@@ -113,7 +127,7 @@ class AdsrProcessor extends AudioWorkletProcessor {
 }
 
 // --- Clock: three gate outputs (x1, /2, /4) ---
-class ClockProcessor extends AudioWorkletProcessor {
+class ClockProcessor extends Base {
     static get parameterDescriptors() {
         return [
             { name: 'bpm', defaultValue: 120, minValue: 1, maxValue: 1000, automationRate: 'k-rate' },
@@ -127,9 +141,10 @@ class ClockProcessor extends AudioWorkletProcessor {
         this.phase = 0;
         this.count = 0;
         this.reset = new GateDetector();
-        this.port.onmessage = (e) => { if (e.data === 'reset') { this.phase = 0; this.count = 0; } };
+        this.onMessage = (e) => { if (e.data === 'reset') { this.phase = 0; this.count = 0; } };
     }
     process(inputs, outputs, params) {
+        if (!this.alive) return false;
         const o1 = outputs[0] && outputs[0][0];
         const o2 = outputs[1] && outputs[1][0];
         const o4 = outputs[2] && outputs[2][0];
@@ -166,7 +181,7 @@ class ClockProcessor extends AudioWorkletProcessor {
 }
 
 // --- Step sequencer: clock + reset in, pitch + gate out ---
-class SequencerProcessor extends AudioWorkletProcessor {
+class SequencerProcessor extends Base {
     constructor() {
         super();
         this.steps = [];
@@ -180,7 +195,7 @@ class SequencerProcessor extends AudioWorkletProcessor {
         this.gateSamples = 0;
         this.clock = new GateDetector();
         this.reset = new GateDetector();
-        this.port.onmessage = (e) => {
+        this.onMessage = (e) => {
             const m = e.data;
             if (m.steps) this.steps = m.steps;
             if (m.length) this.length = m.length;
@@ -189,6 +204,7 @@ class SequencerProcessor extends AudioWorkletProcessor {
         };
     }
     process(inputs, outputs) {
+        if (!this.alive) return false;
         const pitchOut = outputs[0] && outputs[0][0];
         const gateOut = outputs[1] && outputs[1][0];
         const n = (pitchOut || gateOut || []).length;
@@ -219,7 +235,7 @@ class SequencerProcessor extends AudioWorkletProcessor {
 }
 
 // --- Bitcrusher: bit depth and sample-rate reduction, per-channel state ---
-class CrushProcessor extends AudioWorkletProcessor {
+class CrushProcessor extends Base {
     static get parameterDescriptors() {
         return [
             { name: 'bits', defaultValue: 8, minValue: 1, maxValue: 16, automationRate: 'a-rate' },
@@ -228,6 +244,7 @@ class CrushProcessor extends AudioWorkletProcessor {
     }
     constructor() { super(); this.phase = []; this.held = []; }
     process(inputs, outputs, params) {
+        if (!this.alive) return false;
         const input = inputs[0], output = outputs[0];
         if (!input || !input.length) return true;
         const bits = params.bits;
@@ -253,7 +270,7 @@ class CrushProcessor extends AudioWorkletProcessor {
 }
 
 // --- Clock modifier: divide or multiply an incoming clock ---
-class ClockModProcessor extends AudioWorkletProcessor {
+class ClockModProcessor extends Base {
     static get parameterDescriptors() {
         return [
             { name: 'ratio', defaultValue: 2, minValue: 1, maxValue: 32, automationRate: 'k-rate' },
@@ -268,6 +285,7 @@ class ClockModProcessor extends AudioWorkletProcessor {
         this.cycle = sampleRate * 0.5;
     }
     process(inputs, outputs, params) {
+        if (!this.alive) return false;
         const out = outputs[0][0];
         if (!out) return true;
         const clk = inputs[0] && inputs[0][0], rst = inputs[1] && inputs[1][0];
@@ -297,7 +315,7 @@ class ClockModProcessor extends AudioWorkletProcessor {
 }
 
 // --- Euclidean rhythm: clock + reset in, hit and off-beat gates out ---
-class EuclidProcessor extends AudioWorkletProcessor {
+class EuclidProcessor extends Base {
     static get parameterDescriptors() {
         return [
             { name: 'steps', defaultValue: 16, minValue: 1, maxValue: 64, automationRate: 'k-rate' },
@@ -308,6 +326,7 @@ class EuclidProcessor extends AudioWorkletProcessor {
     constructor() { super(); this.clk = new GateDetector(); this.rst = new GateDetector(); this.step = -1; this.hit = false; }
     static isHit(i, n, k, r) { if (k <= 0) return false; if (k >= n) return true; const j = (i + n - (r % n)) % n; return (j * k) % n < k; }
     process(inputs, outputs, params) {
+        if (!this.alive) return false;
         const o1 = outputs[0] && outputs[0][0], o2 = outputs[1] && outputs[1][0];
         const len = (o1 || o2 || []).length;
         if (!len) return true;
@@ -330,10 +349,11 @@ class EuclidProcessor extends AudioWorkletProcessor {
 }
 
 // --- Probability gate: each incoming gate passes to A with probability p, otherwise to B ---
-class ProbGateProcessor extends AudioWorkletProcessor {
+class ProbGateProcessor extends Base {
     static get parameterDescriptors() { return [{ name: 'prob', defaultValue: 0.5, minValue: 0, maxValue: 1, automationRate: 'a-rate' }]; }
     constructor() { super(); this.g = new GateDetector(); this.pass = false; }
     process(inputs, outputs, params) {
+        if (!this.alive) return false;
         const a = outputs[0] && outputs[0][0], b = outputs[1] && outputs[1][0];
         const len = (a || b || []).length;
         if (!len) return true;
@@ -355,7 +375,7 @@ class ProbGateProcessor extends AudioWorkletProcessor {
 }
 
 // --- Trigger delay: each rising edge fires a gate of set length after a delay ---
-class TrigDelayProcessor extends AudioWorkletProcessor {
+class TrigDelayProcessor extends Base {
     static get parameterDescriptors() {
         return [
             { name: 'delay', defaultValue: 0.1, minValue: 0, maxValue: 10, automationRate: 'a-rate' },
@@ -364,6 +384,7 @@ class TrigDelayProcessor extends AudioWorkletProcessor {
     }
     constructor() { super(); this.g = new GateDetector(); this.queue = []; this.t = 0; this.offAt = -1; }
     process(inputs, outputs, params) {
+        if (!this.alive) return false;
         const out = outputs[0][0];
         if (!out) return true;
         const inp = inputs[0] && inputs[0][0];
@@ -385,10 +406,11 @@ class TrigDelayProcessor extends AudioWorkletProcessor {
 }
 
 // --- Logic: AND, OR, XOR, NAND, NOR, XNOR, NOT A on two gates ---
-class LogicProcessor extends AudioWorkletProcessor {
+class LogicProcessor extends Base {
     static get parameterDescriptors() { return [{ name: 'op', defaultValue: 0, minValue: 0, maxValue: 6, automationRate: 'k-rate' }]; }
     constructor() { super(); this.a = new GateDetector(); this.b = new GateDetector(); }
     process(inputs, outputs, params) {
+        if (!this.alive) return false;
         const o = outputs[0] && outputs[0][0], inv = outputs[1] && outputs[1][0];
         const len = (o || inv || []).length;
         if (!len) return true;
@@ -415,7 +437,7 @@ class LogicProcessor extends AudioWorkletProcessor {
 }
 
 // --- Comparator with hysteresis: gate high while input > threshold ---
-class ComparatorProcessor extends AudioWorkletProcessor {
+class ComparatorProcessor extends Base {
     static get parameterDescriptors() {
         return [
             { name: 'threshold', defaultValue: 0, minValue: -10, maxValue: 10, automationRate: 'a-rate' },
@@ -424,6 +446,7 @@ class ComparatorProcessor extends AudioWorkletProcessor {
     }
     constructor() { super(); this.high = false; this.blocks = 0; }
     process(inputs, outputs, params) {
+        if (!this.alive) return false;
         const o = outputs[0] && outputs[0][0], inv = outputs[1] && outputs[1][0];
         const len = (o || inv || []).length;
         if (!len) return true;
@@ -442,7 +465,7 @@ class ComparatorProcessor extends AudioWorkletProcessor {
 }
 
 // --- Math: two inputs, one operation, then scale/offset and optional slew ---
-class MathProcessor extends AudioWorkletProcessor {
+class MathProcessor extends Base {
     static get parameterDescriptors() {
         return [
             { name: 'op', defaultValue: 0, minValue: 0, maxValue: 9, automationRate: 'k-rate' },
@@ -454,6 +477,7 @@ class MathProcessor extends AudioWorkletProcessor {
     }
     constructor() { super(); this.y = 0; this.sh = 0; this.g = new GateDetector(); this.blocks = 0; }
     process(inputs, outputs, params) {
+        if (!this.alive) return false;
         const out = outputs[0][0];
         if (!out) return true;
         const A = inputs[0] && inputs[0][0], B = inputs[1] && inputs[1][0];
@@ -488,7 +512,7 @@ class MathProcessor extends AudioWorkletProcessor {
 }
 
 // --- Envelope follower: rectify and smooth into a CV ---
-class FollowerProcessor extends AudioWorkletProcessor {
+class FollowerProcessor extends Base {
     static get parameterDescriptors() {
         return [
             { name: 'attack', defaultValue: 0.01, minValue: 0.0001, maxValue: 2, automationRate: 'k-rate' },
@@ -497,6 +521,7 @@ class FollowerProcessor extends AudioWorkletProcessor {
     }
     constructor() { super(); this.env = 0; this.blocks = 0; }
     process(inputs, outputs, params) {
+        if (!this.alive) return false;
         const out = outputs[0][0];
         if (!out) return true;
         const inp = inputs[0];
@@ -514,9 +539,10 @@ class FollowerProcessor extends AudioWorkletProcessor {
 }
 
 // --- Clock quantiser: an incoming gate is delayed to the next clock pulse ---
-class ClockQuantProcessor extends AudioWorkletProcessor {
+class ClockQuantProcessor extends Base {
     constructor() { super(); this.g = new GateDetector(); this.c = new GateDetector(); this.armed = false; this.firing = false; }
     process(inputs, outputs) {
+        if (!this.alive) return false;
         const out = outputs[0][0];
         if (!out) return true;
         const gate = inputs[0] && inputs[0][0], clk = inputs[1] && inputs[1][0];
@@ -532,9 +558,10 @@ class ClockQuantProcessor extends AudioWorkletProcessor {
 }
 
 // --- Edge reporter: tells the main thread about gate rises and falls ---
-class EdgeProcessor extends AudioWorkletProcessor {
+class EdgeProcessor extends Base {
     constructor() { super(); this.g = new GateDetector(); }
     process(inputs) {
+        if (!this.alive) return false;
         const x = inputs[0] && inputs[0][0];
         if (!x) return true;
         for (let i = 0; i < x.length; i++) {

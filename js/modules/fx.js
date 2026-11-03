@@ -2,7 +2,7 @@
 // Chorus, Flanger, Phaser, Tremolo, Vibrato, Conv Reverb, Compressor, Tilt EQ,
 // Bitcrusher, Ring Mod, Waveshaper, Clipper, Wavefolder.
 import { registerModule } from '../patch.js';
-import { el, formatFrequency, formatTime, formatPercent, formatDb, dbToGain, setMeter, toast } from '../util.js';
+import { el, formatFrequency, formatTime, formatPercent, formatDb, dbToGain, setMeter, toast, cssVar } from '../util.js';
 
 const ms = (v) => `${(v * 1000).toFixed(v < 0.01 ? 2 : 1)} ms`;
 const times = (v) => `×${v.toFixed(2)}`;
@@ -372,7 +372,7 @@ registerModule({
     },
     create(m, ctx) {
         const mx = mixStage(ctx);
-        const node = new AudioWorkletNode(ctx, 'ma-crush');
+        const node = m.worklet('ma-crush');
         const bitsCv = ctx.createGain(); bitsCv.gain.value = 4; // 1 unit = 4 bits
         bitsCv.connect(node.parameters.get('bits'));
         mx.input.connect(node).connect(mx.wetIn);
@@ -504,13 +504,12 @@ function shaperModule(type, title, blurb, family, def, amount) {
             ['drive', 'amount', 'mix', 'level'].forEach((k) => m.slider(k));
             const draw = () => {
                 const g = canvas.getContext('2d'), W = canvas.width, H = canvas.height, c = shaper.curve;
-                const cs = getComputedStyle(document.documentElement);
                 g.clearRect(0, 0, W, H);
-                g.strokeStyle = cs.getPropertyValue('--display-grid').trim();
+                g.strokeStyle = cssVar('--display-grid').trim();
                 g.lineWidth = 1;
                 g.beginPath(); g.moveTo(W / 2, 0); g.lineTo(W / 2, H); g.moveTo(0, H / 2); g.lineTo(W, H / 2); g.stroke();
                 if (!c) return;
-                g.strokeStyle = cs.getPropertyValue('--display-line').trim();
+                g.strokeStyle = cssVar('--display-line').trim();
                 g.lineWidth = 3;
                 g.beginPath();
                 for (let x = 0; x < W; x++) {

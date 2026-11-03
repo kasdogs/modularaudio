@@ -1,6 +1,6 @@
 // Shaping and control: Filter, VCA, ADSR, Mixer.
 import { registerModule } from '../patch.js';
-import { el, formatFrequency, formatTime, formatPercent, setMeter } from '../util.js';
+import { el, formatFrequency, formatTime, formatPercent, setMeter, cssVar } from '../util.js';
 
 registerModule({
     type: 'filter', title: 'Filter', category: 'Processors', blurb: '12/24 dB multimode with 1V/oct cutoff CV',
@@ -101,7 +101,7 @@ registerModule({
         release: { label: 'Release', min: 0.001, max: 10, curve: 'log', default: 0.5, format: formatTime, unit: 's' },
     },
     create(m, ctx) {
-        const node = new AudioWorkletNode(ctx, 'ma-adsr', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] });
+        const node = m.worklet('ma-adsr', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] });
         const manual = ctx.createConstantSource(); manual.offset.value = 0; manual.start();
         manual.connect(node);
         const canvas = el('canvas', { class: 'display', width: 352, height: 96, style: { height: '48px' } });
@@ -119,7 +119,6 @@ registerModule({
         const draw = () => {
             const g = canvas.getContext('2d');
             const W = canvas.width, H = canvas.height, pad = 6;
-            const cs = getComputedStyle(document.documentElement);
             g.clearRect(0, 0, W, H);
             const { attack: a, decay: d, sustain: s, release: r } = m.params;
             // Log-ish time axis so short and long stages both stay visible.
@@ -128,7 +127,7 @@ registerModule({
             const total = ta + td + hold + tr;
             const X = (v) => pad + (v / total) * (W - pad * 2);
             const Y = (v) => H - pad - v * (H - pad * 2);
-            g.strokeStyle = cs.getPropertyValue('--display-line').trim();
+            g.strokeStyle = cssVar('--display-line').trim();
             g.lineWidth = 3;
             g.beginPath();
             g.moveTo(X(0), Y(0));

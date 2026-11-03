@@ -11,7 +11,7 @@ registerModule({
         swing: { label: 'Swing', min: 0, max: 0.6, default: 0, format: (v) => `${Math.round(v * 100)}%` },
     },
     create(m, ctx) {
-        const node = new AudioWorkletNode(ctx, 'ma-clock', { numberOfInputs: 1, numberOfOutputs: 3, outputChannelCount: [1, 1, 1] });
+        const node = m.worklet('ma-clock', { numberOfInputs: 1, numberOfOutputs: 3, outputChannelCount: [1, 1, 1] });
         const led = el('span', { class: 'led' });
         const runBtn = el('button', { class: 'param-button', type: 'button' });
         const resetBtn = el('button', { class: 'param-button', type: 'button', text: 'Reset' });
@@ -63,7 +63,7 @@ registerModule({
         transpose: { label: 'Transpose', min: -24, max: 24, default: 0, step: 1, format: (v) => `${v > 0 ? '+' : ''}${v} st` },
     },
     create(m, ctx) {
-        const node = new AudioWorkletNode(ctx, 'ma-sequencer', { numberOfInputs: 2, numberOfOutputs: 2, outputChannelCount: [1, 1] });
+        const node = m.worklet('ma-sequencer', { numberOfInputs: 2, numberOfOutputs: 2, outputChannelCount: [1, 1] });
         let selected = 0;
         let playing = -1;
         const grid = el('div', { class: 'steps' });

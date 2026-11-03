@@ -1,7 +1,7 @@
 // Utilities: Scope, Output.
 import { registerModule } from '../patch.js';
 import { audio } from '../audio.js';
-import { el, formatDb, dbToGain, setMeter } from '../util.js';
+import { el, formatDb, dbToGain, setMeter, cssVar } from '../util.js';
 
 registerModule({
     type: 'scope', title: 'Scope', category: 'Utilities', blurb: 'Oscilloscope with pass-through',
@@ -29,9 +29,8 @@ registerModule({
             if (m.minimized || !m.element.isConnected) return;
             analyser.getFloatTimeDomainData(data);
             const W = canvas.width, H = canvas.height;
-            const cs = getComputedStyle(document.documentElement);
             g.clearRect(0, 0, W, H);
-            g.strokeStyle = cs.getPropertyValue('--display-grid').trim();
+            g.strokeStyle = cssVar('--display-grid').trim();
             g.lineWidth = 1;
             g.beginPath();
             for (let i = 1; i < 8; i++) { g.moveTo((W * i) / 8, 0); g.lineTo((W * i) / 8, H); }
@@ -46,7 +45,7 @@ registerModule({
                 }
             }
             let peak = 0;
-            g.strokeStyle = cs.getPropertyValue('--display-line').trim();
+            g.strokeStyle = cssVar('--display-line').trim();
             g.lineWidth = 2.5;
             g.beginPath();
             const step = span / W;

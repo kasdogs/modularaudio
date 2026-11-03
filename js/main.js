@@ -4,7 +4,7 @@ import { Patch, registry } from './patch.js';
 import { Workspace } from './workspace.js';
 import { Cables } from './cables.js';
 import { settings, updateSettings, onSettings } from './settings.js';
-import { el, toast } from './util.js';
+import { el, toast, clearCssCache } from './util.js';
 import { EXAMPLE_PATCH } from './example.js';
 import './modules/sources.js';
 import './modules/shaping.js';
@@ -21,6 +21,8 @@ const $ = (id) => document.getElementById(id);
 const isMobile = () => window.matchMedia('(max-width: 767px)').matches;
 
 async function boot() {
+    // iOS mutes Web Audio when the ringer switch is off unless the session is 'playback'.
+    try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) {}
     const status = $('audio-status');
     try {
         await initAudio(settings.masterVolume);
@@ -57,7 +59,7 @@ async function boot() {
         }, 400);
     };
     patch.onChange((kind) => {
-        if (kind === 'structure') for (const m of patch.modules.values()) ro.observe(m.element);
+        if (kind === 'structure') { for (const m of patch.modules.values()) ro.observe(m.element); cables.validate(); }
         cables.scheduleRedraw();
         save();
     });
@@ -88,28 +90,116 @@ async function boot() {
     window.addEventListener('resize', () => cables.scheduleRedraw());
 }
 
+// Extra search words so common synth names find the right module.
+const KEYWORDS = {
+    oscillator: 'vco osc tone wave', lfo: 'modulation wobble', noise: 'white pink brown', keys: 'keyboard qwerty piano midi play',
+    sampler: 'drum sample kick snare hat one-shot', fmop: 'fm operator dx', adsr: 'envelope eg contour', filter: 'vcf lowpass highpass bandpass notch',
+    vca: 'amp amplifier volume', mixer: 'sum combine', delay: 'echo', reverb: 'room space', convreverb: 'convolution impulse ir space',
+    chorus: 'ensemble stereo', flanger: 'jet', phaser: 'allpass sweep', tremolo: 'volume wobble', vibrato: 'pitch wobble',
+    compressor: 'dynamics limiter squash', tilteq: 'eq tone bright dark', bitcrusher: 'lofi lo-fi crush decimate', ringmod: 'ring modulator am',
+    waveshaper: 'distortion saturation drive overdrive', clipper: 'distortion clip limiter', wavefolder: 'fold distortion west coast',
+    clock: 'tempo bpm metronome', sequencer: 'step seq pattern', clockmod: 'divider multiplier divide multiply', clockquant: 'quantize quantise sync',
+    euclid: 'euclidean rhythm pattern', probgate: 'random chance probability bernoulli', trigdelay: 'delay gate trigger', trigger: 'button gate manual',
+    logic: 'and or xor not gate boolean', comparator: 'threshold schmitt gate', math: 'attenuverter offset scale slew lag sample hold quantize invert',
+    follower: 'envelope follower amplitude', dcblock: 'dc offset highpass', stereo: 'width pan mid side balance', tuner: 'pitch note detect',
+    scope: 'oscilloscope waveform', spectrum: 'fft analyser analyzer frequency',
+};
+
 function buildBrowser(patch, ws) {
     const list = $('module-list');
     const browser = $('module-browser');
+    const search = $('module-search');
+    const empty = $('search-empty');
     const groups = {};
     for (const def of registry.values()) {
         if (def.hiddenInBrowser) continue;
         (groups[def.category] ||= []).push(def);
     }
+    const setBrowserCollapsed = (c) => browser.classList.toggle('collapsed', c);
+    const items = []; // { btn, titleEl, def, cat, hay }
+    const cats = [];
+    const addModule = (def) => {
+        const m = patch.addModule(def.type, ws.freeSpot(def.width || 200, 280));
+        if (m) { ws.place(m); ws.bringToFront(m.element); }
+        if (isMobile()) setBrowserCollapsed(true);
+    };
     for (const cat of CATEGORY_ORDER) {
         if (!groups[cat]) continue;
-        list.append(el('div', { class: 'browser-category', text: cat }));
+        const head = el('div', { class: 'browser-category', text: cat });
+        list.append(head);
+        const catItems = [];
         for (const def of groups[cat]) {
-            const btn = el('button', { class: 'add-module-btn', type: 'button', dataset: { moduleType: def.type } }, def.title, el('small', { text: def.blurb || '' }));
-            btn.addEventListener('click', () => {
-                const m = patch.addModule(def.type, ws.freeSpot(def.width || 200, 280));
-                if (m) { ws.place(m); ws.bringToFront(m.element); }
-                if (isMobile()) setBrowserCollapsed(true);
+            const titleEl = el('span', { text: def.title });
+            const btn = el('button', { class: 'add-module-btn', type: 'button', dataset: { moduleType: def.type } }, titleEl, el('small', { text: def.blurb || '' }));
+            btn.addEventListener('click', () => addModule(def));
+            btn.addEventListener('keydown', (e) => {
+                // Arrow keys move through the visible results.
+                if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+                e.preventDefault();
+                const vis = items.filter((i) => !i.btn.classList.contains('hidden'));
+                const i = vis.findIndex((v) => v.btn === btn);
+                if (e.key === 'ArrowUp' && i === 0) search.focus();
+                else vis[Math.min(vis.length - 1, Math.max(0, i + (e.key === 'ArrowDown' ? 1 : -1)))]?.btn.focus();
             });
             list.append(btn);
+            const item = { btn, titleEl, def, cat, hay: `${def.title} ${def.blurb || ''} ${cat} ${def.type} ${KEYWORDS[def.type] || ''}`.toLowerCase() };
+            items.push(item);
+            catItems.push(item);
         }
+        cats.push({ head, items: catItems });
     }
-    const setBrowserCollapsed = (c) => browser.classList.toggle('collapsed', c);
+
+    const filter = () => {
+        const q = search.value.trim().toLowerCase();
+        const words = q.split(/\s+/).filter(Boolean);
+        let first = null, shown = 0;
+        for (const it of items) {
+            const ok = words.every((w) => it.hay.includes(w));
+            it.btn.classList.toggle('hidden', !ok);
+            it.btn.classList.remove('first-match');
+            // Highlight the matched part of the title.
+            const t = it.def.title, i = words.length ? t.toLowerCase().indexOf(words[0]) : -1;
+            it.titleEl.replaceChildren(...(i >= 0 ? [t.slice(0, i), el('mark', { text: t.slice(i, i + words[0].length) }), t.slice(i + words[0].length)] : [t]));
+            if (ok) { shown++; if (!first) first = it; }
+        }
+        // Rank: a title that starts with the query beats a keyword hit.
+        if (words.length) {
+            const best = items.filter((it) => !it.btn.classList.contains('hidden'))
+                .sort((a, b) => rank(b, words[0]) - rank(a, words[0]))[0];
+            if (best) { first = best; best.btn.classList.add('first-match'); }
+        }
+        for (const c of cats) c.head.classList.toggle('hidden', !c.items.some((it) => !it.btn.classList.contains('hidden')));
+        empty.classList.toggle('hidden', shown > 0);
+        return first;
+    };
+    const rank = (it, w) => {
+        const t = it.def.title.toLowerCase();
+        return t.startsWith(w) ? 3 : t.split(/\s+/).some((p) => p.startsWith(w)) ? 2 : t.includes(w) ? 1 : 0;
+    };
+    search.addEventListener('input', filter);
+    search.addEventListener('keydown', (e) => {
+        e.stopPropagation(); // keep Keys / shortcuts out of the search field
+        if (e.key === 'Enter') {
+            const first = filter();
+            if (first) { addModule(first.def); search.value = ''; filter(); search.blur(); }
+        } else if (e.key === 'Escape') {
+            if (search.value) { search.value = ''; filter(); } else search.blur();
+        } else if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            items.find((i) => !i.btn.classList.contains('hidden'))?.btn.focus();
+        }
+    });
+    // "/" focuses search from anywhere (opens the drawer on phones).
+    document.addEventListener('keydown', (e) => {
+        if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey) return;
+        const a = document.activeElement;
+        if (a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.isContentEditable)) return;
+        e.preventDefault();
+        setBrowserCollapsed(false);
+        search.focus();
+        search.select();
+    });
+
     if (isMobile()) setBrowserCollapsed(true);
     $('browser-toggle').addEventListener('click', () => setBrowserCollapsed(!browser.classList.contains('collapsed')));
     // Tapping the workspace on a phone closes the drawer.
@@ -159,6 +249,7 @@ function bindSettings(patch, ws, cables) {
         if ('masterVolume' in changed) setMasterVolume(s.masterVolume);
         if ('theme' in changed) {
             document.documentElement.classList.toggle('dark', s.theme === 'dark');
+            clearCssCache();
             cables.recolor();
             patch.modules.forEach((m) => m.refreshControls());
         }
@@ -182,7 +273,8 @@ function bindSettings(patch, ws, cables) {
         if (!file) return;
         try {
             const data = JSON.parse(await file.text());
-            patch.load(data);
+            const res = patch.load(data);
+            if (res.skipped.length) setTimeout(() => toast(`Skipped unknown modules: ${[...new Set(res.skipped)].join(', ')}`, 4500), 2300);
             if (data.view) ws.setView(data.view); else requestAnimationFrame(() => ws.fit());
             close();
             toast(`Loaded ${file.name}`);

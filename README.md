@@ -5,7 +5,7 @@ A browser modular synthesizer for phone and desktop, served at kas.dog/modularau
 Plain Web Audio with AudioWorklets and no build step: open `index.html` through any static server (worklets need `http://localhost` or HTTPS, not `file://`).
 
 ## Using it
-- **Add modules** from the browser on the left (the ☰ button on phones).
+- **Add modules** from the browser on the left (the ☰ button on phones). Press <kbd>/</kbd> to search by name or by synth terms (vcf, echo, envelope…); <kbd>Enter</kbd> adds the top match, arrow keys move through results.
 - **Patch** by dragging from one jack to another, or tap an output then an input. Drag a plugged input to move or unplug its cable.
 - **Hold or right-click a jack** to list its cables, change their gain, or delete them. Tap a cable for its gain popup.
 - **Sliders:** hold <kbd>Shift</kbd> while dragging for very fine adjustment (1/25 speed), or slide your finger away from the slider on touch screens. Arrow keys nudge (Shift for finer), click a value to type it, double-tap a label to reset, and use the lock icon to protect a setting.
@@ -16,6 +16,7 @@ Plain Web Audio with AudioWorklets and no build step: open `index.html` through 
 - **Audio:** ±1. **CV:** 1.0 = one octave on pitch and filter cutoff inputs. **Gates:** high above 0.5.
 - Pitch CV 0 = the oscillator's own note; Keys and Sequencer output 0 for C4.
 - Every cable has its own gain (−2 to +2), so it doubles as an attenuverter.
+- Feedback is allowed: a cable that closes a loop is drawn dashed and delayed by one audio block (128 samples), as Web Audio requires.
 
 ## Layout
 - `js/audio.js` — AudioContext, master chain, worklet loading

@@ -14,6 +14,18 @@ function svg(tag, attrs = {}) {
     return e;
 }
 
+// Sub-section of a cubic Bezier between t0 and t1 (de Casteljau).
+function splitCubic(P, t0, t1) {
+    const lerp = (a, b, t) => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
+    const at = (Q, t) => {
+        const a = lerp(Q[0], Q[1], t), b = lerp(Q[1], Q[2], t), c = lerp(Q[2], Q[3], t);
+        const d = lerp(a, b, t), e = lerp(b, c, t), f = lerp(d, e, t);
+        return { left: [Q[0], a, d, f], right: [f, e, c, Q[3]] };
+    };
+    const right = at(P, t0).right;
+    return at(right, (t1 - t0) / (1 - t0)).left;
+}
+
 export class Cables {
     constructor(patch, workspace, layer) {
         this.patch = patch;
@@ -37,6 +49,13 @@ export class Cables {
             if (this.popup.classList.contains('visible') && !this.popup.contains(e.target) && !e.target.classList?.contains('cable-hit')) this.hidePopup();
         }, true);
     }
+    // Drop selection, menus and popups that refer to modules or cables that no longer exist.
+    validate() {
+        const has = (mod) => mod && this.patch.modules.get(mod.id) === mod;
+        if (this.selected && !has(this.selected.mod)) this.clearSelection();
+        if (this.menuRef && !has(this.menuRef.mod)) this.hideMenu();
+        if (this.popupConn && !this.patch.connections.has(this.popupConn)) this.hidePopup();
+    }
     readColors() {
         const cs = getComputedStyle(document.documentElement);
         for (const [k, v] of Object.entries(COLORS)) this.colors[k] = cs.getPropertyValue(v).trim() || '#10b981';
@@ -55,11 +74,24 @@ export class Cables {
         const r = target.getBoundingClientRect();
         return this.ws.toCanvas(r.left + r.width / 2, r.top + r.height / 2);
     }
-    static curve(a, b) {
+    static points(a, b) {
         const dist = Math.hypot(b.x - a.x, b.y - a.y);
         const sag = Math.min(90, dist * 0.18);
         const dx = Math.max(30, Math.abs(b.x - a.x) * 0.35);
-        return `M ${a.x} ${a.y} C ${a.x + dx} ${a.y + sag}, ${b.x - dx} ${b.y + sag}, ${b.x} ${b.y}`;
+        return [a, { x: a.x + dx, y: a.y + sag }, { x: b.x - dx, y: b.y + sag }, b];
+    }
+    static curve(a, b) {
+        const [p0, p1, p2, p3] = Cables.points(a, b);
+        return `M ${p0.x} ${p0.y} C ${p1.x} ${p1.y}, ${p2.x} ${p2.y}, ${p3.x} ${p3.y}`;
+    }
+    // The cable's tap target stops short of both jacks so plugged jacks stay tappable.
+    static hitCurve(a, b, trim = 18) {
+        const P = Cables.points(a, b);
+        let len = 0;
+        for (let i = 1; i < 4; i++) len += Math.hypot(P[i].x - P[i - 1].x, P[i].y - P[i - 1].y);
+        const t0 = Math.min(0.45, trim / Math.max(1, len)), t1 = 1 - t0;
+        const [q0, q1, q2, q3] = splitCubic(P, t0, t1);
+        return `M ${q0.x} ${q0.y} C ${q1.x} ${q1.y}, ${q2.x} ${q2.y}, ${q3.x} ${q3.y}`;
     }
 
     // --- Rendering ---
@@ -79,7 +111,7 @@ export class Cables {
             const d = Cables.curve(a, b);
             g.shadow.setAttribute('d', d);
             g.path.setAttribute('d', d);
-            g.hit.setAttribute('d', d);
+            g.hit.setAttribute('d', Cables.hitCurve(a, b));
             g.p1.setAttribute('cx', a.x); g.p1.setAttribute('cy', a.y);
             g.p2.setAttribute('cx', b.x); g.p2.setAttribute('cy', b.y);
             g.g.classList.toggle('muted', Math.abs(c.gain) < 0.001);
@@ -95,6 +127,7 @@ export class Cables {
         const g = svg('g', { class: 'cable-group' });
         const shadow = svg('path', { class: 'cable-shadow', 'stroke-width': 6 });
         const path = svg('path', { class: 'cable', stroke: color, 'stroke-width': 4 });
+        if (c.feedback) { path.setAttribute('stroke-dasharray', '10 5'); g.classList.add('feedback'); }
         const hit = svg('path', { class: 'cable-hit' });
         const p1 = svg('circle', { class: 'cable-plug', r: 5, fill: color });
         const p2 = svg('circle', { class: 'cable-plug', r: 5, fill: color });
@@ -277,6 +310,7 @@ export class Cables {
     // --- Node menu (hold / right-click) ---
     showMenu(ref, x, y) {
         this.clearSelection();
+        this.menuRef = ref;
         const port = ref.mod.port(ref.dir, ref.port);
         const conns = this.patch.connectionsOf(ref.mod, ref.dir, ref.port);
         const menu = this.menu;
@@ -307,7 +341,7 @@ export class Cables {
         menu.style.left = `${clamp(x + 12, 8, window.innerWidth - r.width - 8)}px`;
         menu.style.top = `${clamp(y - 12, 8, window.innerHeight - r.height - 8)}px`;
     }
-    hideMenu() { this.menu.classList.remove('visible'); }
+    hideMenu() { this.menuRef = null; this.menu.classList.remove('visible'); }
 
     // --- Cable gain popup ---
     showPopup(connId, x, y) {
@@ -336,6 +370,7 @@ export class Cables {
         pop.append(
             el('div', { class: 'cg-title', text: 'Cable Gain' }),
             el('div', { class: 'cg-sub', text: `${c.from.mod.def.title} ${fromP.label} → ${c.to.mod.def.title} ${toP.label}` }),
+            c.feedback ? el('div', { class: 'cg-sub', text: 'Feedback loop (dashed): delayed by one audio block' }) : null,
             el('div', { class: 'param-control-wrapper' }, slider.root, value),
             el('div', { class: 'cg-actions' }, reset, ok, del));
         pop.classList.add('visible');
