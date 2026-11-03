@@ -31,6 +31,18 @@
             <button id="audio-status" class="audio-status" title="Start audio">
                 <span class="status-dot"></span><span class="status-text">Tap to start audio</span>
             </button>
+            <button id="undo-btn" class="header-btn" title="Undo (Ctrl+Z)" aria-label="Undo" disabled>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 14L4 9l5-5M4 9h10.5a5.5 5.5 0 010 11H11"/></svg>
+            </button>
+            <button id="redo-btn" class="header-btn" title="Redo (Ctrl+Y)" aria-label="Redo" disabled>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15 14l5-5-5-5M20 9H9.5a5.5 5.5 0 000 11H13"/></svg>
+            </button>
+            <div class="menu-wrap">
+                <button id="edit-btn" class="header-btn" title="Edit" aria-label="Edit menu" aria-haspopup="menu" aria-expanded="false">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M5 12h.01M12 12h.01M19 12h.01"/><circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/></svg>
+                </button>
+                <div id="edit-menu" class="dropdown" role="menu"></div>
+            </div>
             <button id="view-reset-btn" class="header-btn" title="Fit patch to screen" aria-label="Fit patch to screen">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
             </button>
@@ -56,6 +68,7 @@
                 <svg id="cable-layer" xmlns="http://www.w3.org/2000/svg"></svg>
             </div>
             <div id="patch-hint" class="patch-hint"></div>
+            <div id="selection-bar" class="selection-bar hidden" role="toolbar" aria-label="Selection"></div>
         </main>
     </div>
 
@@ -100,12 +113,26 @@
                 <input type="file" id="upload-preset-input" accept=".json,.preset,application/json">
             </div>
             <div class="preset-buttons">
+                <button id="share-link-btn" class="preset-btn secondary">Copy Share Link</button>
+                <button id="add-subpatch-btn" class="preset-btn secondary">Add Subpatch…</button>
+            </div>
+            <div class="settings-group sample-library">
+                <label class="settings-label">Sample Library</label>
+                <div class="library-row"><span id="library-info">—</span><button id="library-clear-btn" class="param-button">Clear</button></div>
+            </div>
+            <div class="preset-buttons">
                 <button id="example-patch-btn" class="preset-btn secondary">Load Example</button>
                 <button id="clear-patch-btn" class="preset-btn danger">Clear Patch</button>
             </div>
         </div>
     </div>
 
+    <div id="quick-add" class="quick-add" role="dialog" aria-label="Quick add">
+        <input id="quick-add-input" type="search" placeholder="Add module…" autocomplete="off" spellcheck="false">
+        <div id="quick-add-list" class="quick-add-list" role="listbox"></div>
+    </div>
+    <div id="jack-readout" class="jack-readout"></div>
+    <input type="file" id="subpatch-input" accept=".json,application/json" style="display:none">
     <div id="node-sub-menu" role="menu"></div>
     <div id="cable-gain-popup" class="cable-gain-popup"></div>
     <div id="toast" class="toast" role="status" aria-live="polite"></div>

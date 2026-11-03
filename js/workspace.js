@@ -13,6 +13,9 @@ export class Workspace {
         this.onViewChange = onViewChange;
         this.pointers = new Map();
         this.topZ = 10;
+        this.selection = new Set();   // selected Module objects
+        this.selectMode = false;      // touch: background drags draw a selection box
+        this.lastTap = null;
         this.bindPanZoom();
         this.bindModuleDrag();
         this.apply();
@@ -44,10 +47,21 @@ export class Workspace {
     bindPanZoom() {
         const ws = this.ws;
         let pan = null, pinch = null;
+        let box = null;
+        const boxEl = document.createElement('div');
+        boxEl.className = 'select-box';
+        ws.append(boxEl);
         ws.addEventListener('pointerdown', (e) => {
             if (!this.isBackground(e.target)) return;
             this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
             ws.setPointerCapture(e.pointerId);
+            if (this.pointers.size === 1 && (e.shiftKey || this.selectMode)) {
+                // Box selection (Shift-drag, or Select mode on touch screens)
+                box = { x: e.clientX, y: e.clientY, additive: e.shiftKey, base: new Set(this.selection), moved: false };
+                pan = null;
+                return;
+            }
+            if (this.pointers.size === 2) box = null;
             if (this.pointers.size === 1) {
                 pan = { x: e.clientX, y: e.clientY, vx: this.view.x, vy: this.view.y, moved: false };
                 ws.classList.add('panning');
@@ -60,6 +74,19 @@ export class Workspace {
         ws.addEventListener('pointermove', (e) => {
             if (!this.pointers.has(e.pointerId)) return;
             this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+            if (box) {
+                const r = ws.getBoundingClientRect();
+                const x0 = Math.min(box.x, e.clientX), y0 = Math.min(box.y, e.clientY);
+                const x1 = Math.max(box.x, e.clientX), y1 = Math.max(box.y, e.clientY);
+                if (x1 - x0 + y1 - y0 > 4) box.moved = true;
+                Object.assign(boxEl.style, { display: 'block', left: `${x0 - r.left}px`, top: `${y0 - r.top}px`, width: `${x1 - x0}px`, height: `${y1 - y0}px` });
+                const hits = [...this.patch.modules.values()].filter((m) => {
+                    const b = m.element.getBoundingClientRect();
+                    return b.left < x1 && b.right > x0 && b.top < y1 && b.bottom > y0;
+                });
+                this.setSelection(box.additive ? new Set([...box.base, ...hits]) : hits);
+                return;
+            }
             if (pinch && this.pointers.size >= 2) {
                 const [a, b] = [...this.pointers.values()];
                 const d = Math.hypot(a.x - b.x, a.y - b.y);
@@ -82,8 +109,20 @@ export class Workspace {
             if (this.pointers.size < 2) pinch = null;
             if (this.pointers.size === 0) {
                 ws.classList.remove('panning');
-                if (pan && !pan.moved && this.onBackgroundTap) this.onBackgroundTap(e);
+                boxEl.style.display = 'none';
+                const tapped = (pan && !pan.moved) || (box && !box.moved);
+                if (tapped) {
+                    if (!(box && box.additive)) this.clearSelection();
+                    if (this.onBackgroundTap) this.onBackgroundTap(e);
+                    // Double tap / double click on empty space
+                    const now = performance.now();
+                    if (this.lastTap && now - this.lastTap.t < 350 && Math.hypot(e.clientX - this.lastTap.x, e.clientY - this.lastTap.y) < 24) {
+                        this.lastTap = null;
+                        this.onBackgroundDoubleTap && this.onBackgroundDoubleTap(e);
+                    } else this.lastTap = { t: now, x: e.clientX, y: e.clientY };
+                }
                 pan = null;
+                box = null;
                 this.onViewCommit && this.onViewCommit();
             }
         };
@@ -116,25 +155,52 @@ export class Workspace {
             if (!m) return;
             e.preventDefault();
             header.setPointerCapture(e.pointerId);
+            const mod = e.shiftKey || e.ctrlKey || e.metaKey;
+            const wasSelected = this.selection.has(m);
+            if (mod && !wasSelected) this.toggleSelected(m);
+            else if (!mod && !wasSelected) this.setSelection([m]);
             const p = this.toCanvas(e.clientX, e.clientY);
-            drag = { id: e.pointerId, m, ox: p.x - m.x, oy: p.y - m.y, header, moved: false };
-            modEl.classList.add('dragging');
+            // Dragging a selected module moves the whole selection.
+            const group = this.selection.has(m) ? [...this.selection] : [m];
+            drag = { id: e.pointerId, m, start: p, group: group.map((g) => ({ g, x: g.x, y: g.y })), moved: false, mod, wasSelected };
+            group.forEach((g) => g.element.classList.add('dragging'));
         });
         this.canvas.addEventListener('pointermove', (e) => {
             if (!drag || e.pointerId !== drag.id) return;
             const p = this.toCanvas(e.clientX, e.clientY);
-            drag.m.setPosition(p.x - drag.ox, p.y - drag.oy);
+            const dx = p.x - drag.start.x, dy = p.y - drag.start.y;
+            if (!drag.moved && Math.hypot(dx, dy) < 2) return;
+            for (const it of drag.group) it.g.setPosition(it.x + dx, it.y + dy);
             drag.moved = true;
             this.onModuleMove && this.onModuleMove(drag.m);
         });
         const end = (e) => {
             if (!drag || e.pointerId !== drag.id) return;
-            drag.m.element.classList.remove('dragging');
+            drag.group.forEach((it) => it.g.element.classList.remove('dragging'));
             if (drag.moved) this.patch.changed('layout');
+            else if (drag.mod && drag.wasSelected) this.toggleSelected(drag.m); // modifier-click deselects
+            else if (!drag.mod && this.selection.size > 1) this.setSelection([drag.m]);
             drag = null;
         };
         this.canvas.addEventListener('pointerup', end);
         this.canvas.addEventListener('pointercancel', end);
+    }
+    // --- Selection ---
+    setSelection(mods) {
+        for (const m of this.selection) m.element.classList.remove('selected-module');
+        this.selection = new Set([...mods].filter((m) => this.patch.modules.get(m.id) === m));
+        for (const m of this.selection) m.element.classList.add('selected-module');
+        this.onSelectionChange && this.onSelectionChange(this.selection);
+    }
+    toggleSelected(m) {
+        const next = new Set(this.selection);
+        if (next.has(m)) next.delete(m); else next.add(m);
+        this.setSelection(next);
+    }
+    clearSelection() { if (this.selection.size) this.setSelection([]); }
+    pruneSelection() {
+        const live = [...this.selection].filter((m) => this.patch.modules.get(m.id) === m);
+        if (live.length !== this.selection.size) this.setSelection(live);
     }
     bringToFront(modEl) {
         if (modEl.style.zIndex === String(this.topZ)) return;

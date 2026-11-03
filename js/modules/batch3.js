@@ -3,6 +3,7 @@
 import { registerModule } from '../patch.js';
 import { el, clamp, formatFrequency, formatTime, formatPercent, formatDb, dbToGain, setMeter, toast, nearestNote, freqToMidi, midiToName, cssVar } from '../util.js';
 import { PITCH_PARAMS } from '../controls.js';
+import { storeSample, getSample, librarySelect } from '../samples.js';
 
 const stop = (e) => e.stopPropagation();
 const button = (text) => { const b = el('button', { class: 'param-button', type: 'button', text }); b.addEventListener('pointerdown', stop); return b; };
@@ -45,6 +46,7 @@ registerModule({
         tune: { label: 'Tune', min: -24, max: 24, default: 0, step: 0.01, format: (v) => `${v > 0 ? '+' : ''}${v.toFixed(2)} st` },
         level: { label: 'Level', min: -60, max: 6, default: -3, step: 0.1, format: formatDb, unit: 'dB' },
         fileName: { default: '' },
+        sampleId: { default: '' },
     },
     create(m, ctx) {
         const out = ctx.createGain();
@@ -59,7 +61,8 @@ registerModule({
         const info = el('span', { class: 'node-label', text: '' });
         const play = button('Play'), load = button('Load File…');
         m.select('source');
-        m.content.append(canvas, el('div', { class: 'info-row' }, info), el('div', { class: 'btn-row' }, play, load), fileIn);
+        const lib = librarySelect(el, (id, name) => { m.setParam('fileName', name, false); m.setParam('sampleId', id); m.setParam('source', 'file'); });
+        m.content.append(canvas, el('div', { class: 'info-row' }, info), el('div', { class: 'btn-row' }, play, load), lib.el, fileIn);
         m.select('mode'); m.select('reverse');
         ['start', 'end', 'tune', 'level'].forEach((k) => m.slider(k));
         const buffers = {};
@@ -131,12 +134,16 @@ registerModule({
             fileIn.value = '';
             if (!f) return;
             try {
-                fileBuf = await ctx.decodeAudioData(await f.arrayBuffer());
+                const { id } = await storeSample(f); // kept in this browser's library
                 m.setParam('fileName', f.name, false);
                 m.setParam('end', 1, false);
                 m.setParam('start', 0, false);
+                m.setParam('sampleId', id);
                 m.setParam('source', 'file');
-            } catch (err) { toast(`Couldn’t read that audio file: ${err.message || err}`, 4000); }
+            } catch (err) {
+                try { fileBuf = await ctx.decodeAudioData(await f.arrayBuffer()); m.setParam('fileName', f.name, false); m.setParam('source', 'file'); toast('Sample loaded, but this browser could not store it for next time', 4000); }
+                catch (e2) { toast(`Couldn’t read that audio file: ${e2.message || e2}`, 4000); }
+            }
         });
         m.addInput('trig', 'Trig', 'gate', edge);
         m.addInput('pitch', 'Pitch', 'cv', pitch);
@@ -145,10 +152,11 @@ registerModule({
             update(key, v) {
                 if (key === 'level') m.set(out.gain, dbToGain(v));
                 if (key === 'tune') m.set(tune.gain, v * 100);
+                if (key === 'sampleId' && v) getSample(v).then((b) => { if (m.params.sampleId === v) { fileBuf = b; draw(); } });
                 if (['source', 'start', 'end', 'fileName', 'reverse'].includes(key)) draw();
             },
             refresh: draw,
-            dispose() { edge.port.onmessage = null; release(ctx.currentTime); try { manual.stop(); pitchSum.stop(); } catch (e) {} },
+            dispose() { lib.dispose(); edge.port.onmessage = null; release(ctx.currentTime); try { manual.stop(); pitchSum.stop(); } catch (e) {} },
         };
     },
 });

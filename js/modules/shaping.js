@@ -151,25 +151,37 @@ registerModule({
     },
 });
 
+const panFmt = (v) => (Math.abs(v) < 0.005 ? 'C' : `${v < 0 ? 'L' : 'R'}${Math.round(Math.abs(v) * 100)}`);
+const lvlFmt = (v) => `×${v.toFixed(2)}`;
 registerModule({
-    type: 'mixer', title: 'Mixer', category: 'Processors', blurb: 'Four channels into one',
+    type: 'mixer', title: 'Mixer', category: 'Processors', blurb: 'Four channels with pan, stereo out', width: 220,
     params: {
-        ch1: { label: 'Channel 1', min: 0, max: 1.5, curve: 2, default: 0.8, format: (v) => `×${v.toFixed(2)}` },
-        ch2: { label: 'Channel 2', min: 0, max: 1.5, curve: 2, default: 0.8, format: (v) => `×${v.toFixed(2)}` },
-        ch3: { label: 'Channel 3', min: 0, max: 1.5, curve: 2, default: 0.8, format: (v) => `×${v.toFixed(2)}` },
-        ch4: { label: 'Channel 4', min: 0, max: 1.5, curve: 2, default: 0.8, format: (v) => `×${v.toFixed(2)}` },
-        master: { label: 'Master', min: 0, max: 1.5, curve: 2, default: 1, format: (v) => `×${v.toFixed(2)}` },
+        ch1: { label: 'Ch 1 Level', min: 0, max: 1.5, curve: 2, default: 0.8, format: lvlFmt },
+        pan1: { label: 'Ch 1 Pan', min: -1, max: 1, default: 0, format: panFmt },
+        ch2: { label: 'Ch 2 Level', min: 0, max: 1.5, curve: 2, default: 0.8, format: lvlFmt },
+        pan2: { label: 'Ch 2 Pan', min: -1, max: 1, default: 0, format: panFmt },
+        ch3: { label: 'Ch 3 Level', min: 0, max: 1.5, curve: 2, default: 0.8, format: lvlFmt },
+        pan3: { label: 'Ch 3 Pan', min: -1, max: 1, default: 0, format: panFmt },
+        ch4: { label: 'Ch 4 Level', min: 0, max: 1.5, curve: 2, default: 0.8, format: lvlFmt },
+        pan4: { label: 'Ch 4 Pan', min: -1, max: 1, default: 0, format: panFmt },
+        master: { label: 'Master', min: 0, max: 1.5, curve: 2, default: 1, format: lvlFmt },
     },
     create(m, ctx) {
         const out = ctx.createGain();
-        const ch = [1, 2, 3, 4].map(() => { const g = ctx.createGain(); g.connect(out); return g; });
-        ['ch1', 'ch2', 'ch3', 'ch4', 'master'].forEach((k) => m.slider(k));
-        ch.forEach((g, i) => m.addInput(`in${i + 1}`, `In ${i + 1}`, 'audio', g));
+        const ch = [1, 2, 3, 4].map(() => {
+            const g = ctx.createGain(), p = ctx.createStereoPanner();
+            g.connect(p).connect(out);
+            return { g, p };
+        });
+        ['ch1', 'pan1', 'ch2', 'pan2', 'ch3', 'pan3', 'ch4', 'pan4', 'master'].forEach((k) => m.slider(k));
+        ch.forEach((c, i) => m.addInput(`in${i + 1}`, `In ${i + 1}`, 'audio', c.g));
+        ch.forEach((c, i) => m.addInput(`pan${i + 1}`, `Pan ${i + 1}`, 'cv', c.p.pan));
         m.addOutput('out', 'Out', 'audio', out);
         return {
             update(key, v) {
                 if (key === 'master') m.set(out.gain, v);
-                else ch[Number(key.slice(2)) - 1] && m.set(ch[Number(key.slice(2)) - 1].gain, v);
+                else if (key.startsWith('ch')) m.set(ch[Number(key.slice(2)) - 1].g.gain, v);
+                else if (key.startsWith('pan')) m.set(ch[Number(key.slice(3)) - 1].p.pan, v);
             },
         };
     },

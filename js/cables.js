@@ -2,6 +2,7 @@
 // re-patch by dragging a plugged input, hold/right-click menu, cable gain popup.
 import { el, clamp, typingInField } from './util.js';
 import { FineSlider } from './controls.js';
+import { menuReadout } from './readouts.js';
 
 const SVGNS = 'http://www.w3.org/2000/svg';
 const HOLD_MS = 450;
@@ -319,6 +320,7 @@ export class Cables {
         close.addEventListener('click', () => this.hideMenu());
         menu.append(el('div', { class: 'sub-menu-header' },
             el('span', { class: 'sub-menu-title', text: `${ref.mod.def.title} · ${port.label} ${ref.dir === 'in' ? 'in' : 'out'}` }), close));
+        menu.append(menuReadout(this.patch, ref));
         if (!conns.length) menu.append(el('div', { class: 'sub-menu-empty', text: 'Nothing connected' }));
         for (const c of conns) {
             const other = ref.dir === 'out' ? c.to : c.from;
@@ -341,7 +343,7 @@ export class Cables {
         menu.style.left = `${clamp(x + 12, 8, window.innerWidth - r.width - 8)}px`;
         menu.style.top = `${clamp(y - 12, 8, window.innerHeight - r.height - 8)}px`;
     }
-    hideMenu() { this.menuRef = null; this.menu.classList.remove('visible'); }
+    hideMenu() { this.menuRef = null; this.menu.classList.remove('visible'); this.menu.replaceChildren(); }
 
     // --- Cable gain popup ---
     showPopup(connId, x, y) {

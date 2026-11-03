@@ -3,6 +3,7 @@
 // Bitcrusher, Ring Mod, Waveshaper, Clipper, Wavefolder.
 import { registerModule } from '../patch.js';
 import { el, formatFrequency, formatTime, formatPercent, formatDb, dbToGain, setMeter, toast, cssVar } from '../util.js';
+import { storeSample, getSample, librarySelect } from '../samples.js';
 
 const ms = (v) => `${(v * 1000).toFixed(v < 0.01 ? 2 : 1)} ms`;
 const times = (v) => `×${v.toFixed(2)}`;
@@ -41,9 +42,14 @@ registerModule({
         const { osc, rateCv } = lfo(ctx);
         const merger = ctx.createChannelMerger(2);
         const depthCv = ctx.createGain(); depthCv.gain.value = 0.005;
+        // True stereo: left feeds the left delay and right the right; mono input is copied to both.
+        const up = ctx.createGain(); // forces two channels ("speakers" upmix copies mono to both)
+        up.channelCount = 2; up.channelCountMode = 'explicit'; up.channelInterpretation = 'speakers';
+        const split = ctx.createChannelSplitter(2);
+        mx.input.connect(up).connect(split);
         const sides = [1, -1].map((sign, ch) => {
             const d = ctx.createDelay(0.1), g = ctx.createGain(), fb = ctx.createGain();
-            mx.input.connect(d);
+            split.connect(d, ch);
             osc.connect(g).connect(d.delayTime);
             depthCv.connect(d.delayTime);
             d.connect(fb).connect(d);
@@ -251,6 +257,7 @@ registerModule({
         gain: { label: 'Wet Gain', min: 0, max: 2, default: 1, format: times },
         mix: mixParam(0.35),
         fileName: { default: '' },
+        sampleId: { default: '' },
     },
     create(m, ctx) {
         const mx = mixStage(ctx);
@@ -261,7 +268,8 @@ registerModule({
         const loadBtn = el('button', { class: 'param-button', type: 'button', text: 'Load IR File…' });
         const info = el('div', { class: 'info-row' }, el('span', { class: 'node-label', text: '' }));
         m.select('space');
-        m.content.append(el('div', { class: 'btn-row' }, loadBtn), info, fileInput);
+        const lib = librarySelect(el, (id, name) => { m.setParam('fileName', name, false); m.setParam('sampleId', id); m.setParam('space', 'file'); });
+        m.content.append(el('div', { class: 'btn-row' }, loadBtn), lib.el, info, fileInput);
         ['predelay', 'gain', 'mix'].forEach((k) => m.slider(k));
         loadBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
         loadBtn.addEventListener('click', () => fileInput.click());
@@ -276,11 +284,13 @@ registerModule({
             fileInput.value = '';
             if (!f) return;
             try {
-                fileBuffer = await ctx.decodeAudioData(await f.arrayBuffer());
+                const { id } = await storeSample(f);
                 m.setParam('fileName', f.name, false);
+                m.setParam('sampleId', id);
                 m.setParam('space', 'file');
             } catch (e) {
-                toast(`Couldn’t read that audio file: ${e.message || e}`, 4000);
+                try { fileBuffer = await ctx.decodeAudioData(await f.arrayBuffer()); m.setParam('fileName', f.name, false); m.setParam('space', 'file'); toast('Impulse loaded, but this browser could not store it for next time', 4000); }
+                catch (e2) { toast(`Couldn’t read that audio file: ${e2.message || e2}`, 4000); }
             }
         });
         m.addInput('in', 'In', 'audio', mx.input);
@@ -288,7 +298,7 @@ registerModule({
         return {
             update(key, v) {
                 if (key === 'space') {
-                    // Files aren't stored in presets, so a restored patch asks for the file again.
+                    // Loaded files live in the browser's sample library (see samples.js).
                     if (v === 'file') conv.buffer = fileBuffer;
                     else conv.buffer = makeSpace(ctx, v);
                     showInfo();
@@ -297,7 +307,9 @@ registerModule({
                 if (key === 'gain') m.set(wet.gain, v);
                 if (key === 'mix') mx.set(m, v);
                 if (key === 'fileName') showInfo();
+                if (key === 'sampleId' && v) getSample(v).then((b) => { if (m.params.sampleId !== v || !b) return; fileBuffer = b; if (m.params.space === 'file') conv.buffer = b; showInfo(); });
             },
+            dispose() { lib.dispose(); },
         };
     },
 });
@@ -488,6 +500,7 @@ function shaperModule(type, title, blurb, family, def, amount) {
             amount: { label: 'Amount', min: amount[0], max: amount[1], curve: 2, default: amount[2], format: (v) => v.toFixed(2) },
             mix: mixParam(1),
             level: { label: 'Output', min: -24, max: 6, default: -3, step: 0.1, format: formatDb, unit: 'dB' },
+            oversample: { label: 'Oversampling', default: '4x', options: [{ value: 'none', label: 'Off (most aliasing, lowest CPU)' }, { value: '2x', label: '2× oversampling' }, { value: '4x', label: '4× oversampling (cleanest)' }] },
         },
         create(m, ctx) {
             const mx = mixStage(ctx);
@@ -502,6 +515,7 @@ function shaperModule(type, title, blurb, family, def, amount) {
             m.select('curve');
             m.content.append(canvas);
             ['drive', 'amount', 'mix', 'level'].forEach((k) => m.slider(k));
+            m.select('oversample');
             const draw = () => {
                 const g = canvas.getContext('2d'), W = canvas.width, H = canvas.height, c = shaper.curve;
                 g.clearRect(0, 0, W, H);
@@ -533,6 +547,7 @@ function shaperModule(type, title, blurb, family, def, amount) {
                     if (key === 'drive') m.set(drive.gain, v);
                     if (key === 'mix') mx.set(m, v);
                     if (key === 'level') m.set(out.gain, dbToGain(v));
+                    if (key === 'oversample') shaper.oversample = v;
                 },
                 refresh: draw,
             };

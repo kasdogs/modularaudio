@@ -6,15 +6,23 @@ import { Cables } from './cables.js';
 import { settings, updateSettings, onSettings } from './settings.js';
 import { el, toast, clearCssCache } from './util.js';
 import { EXAMPLE_PATCH } from './example.js';
+import { haystack, rank as rankDef } from './search.js';
+import { History } from './history.js';
+import { Editor, decodeShare, download } from './editor.js';
+import { Readouts } from './readouts.js';
+import { listSamples, clearSamples, onLibraryChange } from './samples.js';
 import './modules/sources.js';
 import './modules/shaping.js';
 import './modules/effects.js';
 import './modules/fx.js';
 import './modules/batch3.js';
+import './modules/batch4.js';
 import './modules/sequencing.js';
 import './modules/utility.js';
 
-const PATCH_KEY = 'modularaudio.patch';
+// ?test runs the app isolated from the real saved patch (used by _tests/).
+const TEST_MODE = new URLSearchParams(location.search).has('test');
+const PATCH_KEY = TEST_MODE ? 'modularaudio.test.patch' : 'modularaudio.patch';
 const CATEGORY_ORDER = ['Sources', 'Modulation', 'Processors', 'Effects', 'Dynamics & EQ', 'Distortion', 'Sequencing', 'Logic & CV', 'Utilities'];
 const $ = (id) => document.getElementById(id);
 
@@ -45,9 +53,9 @@ async function boot() {
     let cables = null;
     const ws = new Workspace($('workspace'), canvas, patch, () => cables && cables.scheduleRedraw());
     cables = new Cables(patch, ws, $('cable-layer'));
+    new Readouts(patch, canvas);
     ws.onModuleMove = () => cables.redraw();
     ws.onBackgroundTap = () => { cables.clearSelection(); cables.hideMenu(); cables.hidePopup(); };
-    window.modularAudio = { patch, ws, cables, audio }; // handy for debugging from the console
 
     // Redraw cables whenever a module changes size (minimise, mode switches, etc.)
     const ro = new ResizeObserver(() => cables.scheduleRedraw());
@@ -55,24 +63,22 @@ async function boot() {
     const save = () => {
         clearTimeout(saveTimer);
         saveTimer = setTimeout(() => {
+            if (TEST_MODE) return;
             try { localStorage.setItem(PATCH_KEY, JSON.stringify(patch.serialize(ws.view))); } catch (e) {}
         }, 400);
     };
     patch.onChange((kind) => {
-        if (kind === 'structure') { for (const m of patch.modules.values()) ro.observe(m.element); cables.validate(); }
+        if (kind === 'structure') { for (const m of patch.modules.values()) ro.observe(m.element); cables.validate(); ws.pruneSelection(); }
         cables.scheduleRedraw();
         save();
     });
     ws.onViewCommit = save;
 
-    buildBrowser(patch, ws);
-    bindSettings(patch, ws, cables);
-
     // Restore the last session, or start with the example.
     patch.addModule('output', { x: 600, y: 40 });
     let restored = false;
     try {
-        const saved = JSON.parse(localStorage.getItem(PATCH_KEY) || 'null');
+        const saved = TEST_MODE ? null : JSON.parse(localStorage.getItem(PATCH_KEY) || 'null');
         if (saved && saved.modules?.length) {
             patch.load(saved);
             if (saved.view) ws.setView(saved.view);
@@ -82,30 +88,40 @@ async function boot() {
         console.warn('Could not restore the saved patch', e);
     }
     if (!restored) patch.load(EXAMPLE_PATCH);
+
+    // History starts from the restored session so the first undo can't empty the patch.
+    let editor = null;
+    const history = new History(patch, () => editor && editor.updateButtons());
+    editor = new Editor({ patch, ws, cables, history, categories: CATEGORY_ORDER });
+    window.modularAudio = { patch, ws, cables, audio, history, editor }; // handy for debugging (and used by _tests/)
+
+    buildBrowser(patch, ws, history);
+    bindSettings(patch, ws, cables, history, editor);
+
     requestAnimationFrame(() => {
-        if (!restored) { ws.stackColumns(); ws.fit(); }
+        if (!restored) { ws.stackColumns(); ws.fit(); history.reset(); }
         cables.redraw();
     });
+
+    // Opening a share link: load it as one undoable step, then tidy the address bar.
+    const share = location.hash.match(/^#patch=([A-Za-z0-9_-]+)$/);
+    if (share) {
+        try {
+            const data = await decodeShare(share[1]);
+            history.commit();
+            patch.load(data);
+            history.commit();
+            if (data.view) ws.setView(data.view); else requestAnimationFrame(() => ws.fit());
+            toast('Opened a shared patch · Ctrl+Z restores your previous patch', 4500);
+        } catch (e) { toast(`That share link couldn’t be opened: ${e.message}`, 4500); }
+        window.history.replaceState(null, '', location.pathname + location.search);
+    }
+    window.modularAudioReady = true;
 
     window.addEventListener('resize', () => cables.scheduleRedraw());
 }
 
-// Extra search words so common synth names find the right module.
-const KEYWORDS = {
-    oscillator: 'vco osc tone wave', lfo: 'modulation wobble', noise: 'white pink brown', keys: 'keyboard qwerty piano midi play',
-    sampler: 'drum sample kick snare hat one-shot', fmop: 'fm operator dx', adsr: 'envelope eg contour', filter: 'vcf lowpass highpass bandpass notch',
-    vca: 'amp amplifier volume', mixer: 'sum combine', delay: 'echo', reverb: 'room space', convreverb: 'convolution impulse ir space',
-    chorus: 'ensemble stereo', flanger: 'jet', phaser: 'allpass sweep', tremolo: 'volume wobble', vibrato: 'pitch wobble',
-    compressor: 'dynamics limiter squash', tilteq: 'eq tone bright dark', bitcrusher: 'lofi lo-fi crush decimate', ringmod: 'ring modulator am',
-    waveshaper: 'distortion saturation drive overdrive', clipper: 'distortion clip limiter', wavefolder: 'fold distortion west coast',
-    clock: 'tempo bpm metronome', sequencer: 'step seq pattern', clockmod: 'divider multiplier divide multiply', clockquant: 'quantize quantise sync',
-    euclid: 'euclidean rhythm pattern', probgate: 'random chance probability bernoulli', trigdelay: 'delay gate trigger', trigger: 'button gate manual',
-    logic: 'and or xor not gate boolean', comparator: 'threshold schmitt gate', math: 'attenuverter offset scale slew lag sample hold quantize invert',
-    follower: 'envelope follower amplitude', dcblock: 'dc offset highpass', stereo: 'width pan mid side balance', tuner: 'pitch note detect',
-    scope: 'oscilloscope waveform', spectrum: 'fft analyser analyzer frequency',
-};
-
-function buildBrowser(patch, ws) {
+function buildBrowser(patch, ws, history) {
     const list = $('module-list');
     const browser = $('module-browser');
     const search = $('module-search');
@@ -119,6 +135,7 @@ function buildBrowser(patch, ws) {
     const items = []; // { btn, titleEl, def, cat, hay }
     const cats = [];
     const addModule = (def) => {
+        history.commit();
         const m = patch.addModule(def.type, ws.freeSpot(def.width || 200, 280));
         if (m) { ws.place(m); ws.bringToFront(m.element); }
         if (isMobile()) setBrowserCollapsed(true);
@@ -142,7 +159,7 @@ function buildBrowser(patch, ws) {
                 else vis[Math.min(vis.length - 1, Math.max(0, i + (e.key === 'ArrowDown' ? 1 : -1)))]?.btn.focus();
             });
             list.append(btn);
-            const item = { btn, titleEl, def, cat, hay: `${def.title} ${def.blurb || ''} ${cat} ${def.type} ${KEYWORDS[def.type] || ''}`.toLowerCase() };
+            const item = { btn, titleEl, def, cat, hay: haystack(def) };
             items.push(item);
             catItems.push(item);
         }
@@ -172,10 +189,7 @@ function buildBrowser(patch, ws) {
         empty.classList.toggle('hidden', shown > 0);
         return first;
     };
-    const rank = (it, w) => {
-        const t = it.def.title.toLowerCase();
-        return t.startsWith(w) ? 3 : t.split(/\s+/).some((p) => p.startsWith(w)) ? 2 : t.includes(w) ? 1 : 0;
-    };
+    const rank = (it, w) => rankDef(it.def, w);
     search.addEventListener('input', filter);
     search.addEventListener('keydown', (e) => {
         e.stopPropagation(); // keep Keys / shortcuts out of the search field
@@ -215,7 +229,7 @@ function applyLayout() {
     document.documentElement.style.setProperty('--cable-opacity', String(settings.cableOpacity));
 }
 
-function bindSettings(patch, ws, cables) {
+function bindSettings(patch, ws, cables, history, editor) {
     const modal = $('settings-modal');
     const open = () => modal.classList.add('open');
     const close = () => modal.classList.remove('open');
@@ -260,12 +274,24 @@ function bindSettings(patch, ws, cables) {
 
     // Presets
     $('download-preset-btn').addEventListener('click', () => {
-        const data = JSON.stringify(patch.serialize(ws.view), null, 2);
-        const a = el('a', { href: URL.createObjectURL(new Blob([data], { type: 'application/json' })), download: `modularaudio-${new Date().toISOString().slice(0, 10)}.json` });
-        document.body.append(a);
-        a.click();
-        a.remove();
-        setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+        download(`modularaudio-${new Date().toISOString().slice(0, 10)}.patch.json`, JSON.stringify(patch.serialize(ws.view), null, 2));
+    });
+    $('share-link-btn').addEventListener('click', () => editor.copyShareLink(ws.view));
+    $('add-subpatch-btn').addEventListener('click', () => { close(); editor.pickSubpatch(); });
+    // Sample library summary
+    const libInfo = async () => {
+        try {
+            const items = await listSamples();
+            const mb = items.reduce((a, s) => a + s.size, 0) / 1048576;
+            $('library-info').textContent = items.length ? `${items.length} sample${items.length > 1 ? 's' : ''} stored in this browser · ${mb.toFixed(1)} MB` : 'No samples stored yet';
+        } catch (e) { $('library-info').textContent = 'Not available in this browser'; }
+    };
+    onLibraryChange(libInfo);
+    $('settings-btn').addEventListener('click', libInfo);
+    $('library-clear-btn').addEventListener('click', async () => {
+        if (!confirm('Delete every stored sample from this browser? Modules using them will need the files loaded again.')) return;
+        await clearSamples();
+        toast('Sample library cleared');
     });
     $('upload-preset-input').addEventListener('change', async (e) => {
         const file = e.target.files[0];
@@ -273,24 +299,35 @@ function bindSettings(patch, ws, cables) {
         if (!file) return;
         try {
             const data = JSON.parse(await file.text());
+            if (data && data.kind === 'subpatch') {
+                // Subpatches are always additive, even through Upload Preset.
+                close();
+                editor.insertAtView(data, file.name);
+                return;
+            }
+            history.commit();
             const res = patch.load(data);
+            history.commit();
             if (res.skipped.length) setTimeout(() => toast(`Skipped unknown modules: ${[...new Set(res.skipped)].join(', ')}`, 4500), 2300);
             if (data.view) ws.setView(data.view); else requestAnimationFrame(() => ws.fit());
             close();
-            toast(`Loaded ${file.name}`);
+            toast(`Loaded ${file.name} · Ctrl+Z restores your previous patch`, 3500);
         } catch (err) {
             toast(`Couldn’t load that file: ${err.message}`, 4000);
         }
     });
     $('example-patch-btn').addEventListener('click', () => {
+        history.commit();
         patch.load(EXAMPLE_PATCH);
         close();
-        requestAnimationFrame(() => { ws.stackColumns(); ws.fit(); });
+        requestAnimationFrame(() => { ws.stackColumns(); ws.fit(); history.commit(); });
     });
     $('clear-patch-btn').addEventListener('click', () => {
-        if (!confirm('Remove every module from the patch?')) return;
+        history.commit();
         patch.clear();
+        history.commit();
         close();
+        toast('Patch cleared · Ctrl+Z to undo', 3000);
     });
 }
 

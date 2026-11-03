@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Modular Audio Tests</title>
+<style>
+    :root { color-scheme: light dark; --ok: #059669; --bad: #dc2626; --muted: #6b7280; }
+    body { font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; margin: 0; padding: 1.25rem; background: Canvas; color: CanvasText; }
+    h1 { font-size: 1.3rem; margin: 0 0 0.25rem; }
+    p.note { color: var(--muted); font-size: 0.85rem; margin: 0 0 1rem; max-width: 60rem; }
+    .bar { display: flex; gap: 0.75rem; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; }
+    button { font: inherit; padding: 0.5rem 1rem; border-radius: 0.375rem; border: 1px solid #3b82f6; background: #3b82f6; color: #fff; cursor: pointer; }
+    button:disabled { opacity: 0.5; cursor: default; }
+    #summary { font-weight: 600; }
+    #summary.ok { color: var(--ok); } #summary.bad { color: var(--bad); }
+    table { border-collapse: collapse; width: 100%; max-width: 60rem; font-size: 0.88rem; }
+    td { padding: 0.35rem 0.5rem; border-bottom: 1px solid rgba(128,128,128,0.25); vertical-align: top; }
+    td.s { width: 4.5rem; font-weight: 600; } td.t { width: 5rem; color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+    .pass { color: var(--ok); } .fail { color: var(--bad); } .run { color: #d97706; }
+    .err { color: var(--bad); font-family: ui-monospace, monospace; font-size: 0.8rem; white-space: pre-wrap; margin-top: 0.2rem; }
+    iframe { width: 100%; max-width: 60rem; height: 420px; border: 1px solid rgba(128,128,128,0.4); border-radius: 0.375rem; margin-top: 1rem; }
+</style>
+</head>
+<body>
+<h1>Modular Audio · Test Suite</h1>
+<p class="note">Runs the real app in the frame below (<code>?test</code> mode: your saved patch is never touched). This folder is not published: GitHub Pages skips folders that start with an underscore. Serve the repo root locally (<code>python3 -m http.server</code>) and open <code>/_tests/</code>, or run <code>python3 _tests/run.py</code> for a headless run.</p>
+<div class="bar"><button id="run">Run all tests</button><span id="summary"></span></div>
+<table id="results"></table>
+<iframe id="app" src="../index.html?test" allow="autoplay; midi"></iframe>
+<script type="module">
+import { tests } from './suite.js';
+const frame = document.getElementById('app'), table = document.getElementById('results'), summary = document.getElementById('summary'), runBtn = document.getElementById('run');
+const rows = tests.map((t) => { const tr = document.createElement('tr'); tr.innerHTML = `<td class="s">·</td><td><div>${t.name}</div></td><td class="t"></td>`; table.append(tr); return tr; });
+async function appReady() {
+    for (let i = 0; i < 200; i++) { const w = frame.contentWindow; if (w && w.modularAudioReady && w.modularAudio) return w; await new Promise((r) => setTimeout(r, 50)); }
+    throw new Error('App did not start');
+}
+async function run() {
+    runBtn.disabled = true;
+    summary.className = ''; summary.textContent = 'Running…';
+    const app = await appReady();
+    const A = app.modularAudio;
+    await A.audio.ctx.resume();
+    const results = [];
+    for (let i = 0; i < tests.length; i++) {
+        const t = tests[i], tr = rows[i];
+        tr.cells[0].textContent = 'RUN'; tr.cells[0].className = 's run';
+        tr.querySelector('.err')?.remove();
+        const t0 = performance.now();
+        let error = null;
+        try {
+            await Promise.race([t.fn({ A, app, wait: (ms) => new Promise((r) => setTimeout(r, ms)) }), new Promise((_, rej) => setTimeout(() => rej(new Error('timed out after 30 s')), 30000))]);
+        } catch (e) { error = e; }
+        const ms = Math.round(performance.now() - t0);
+        tr.cells[0].textContent = error ? 'FAIL' : 'PASS';
+        tr.cells[0].className = `s ${error ? 'fail' : 'pass'}`;
+        tr.cells[2].textContent = `${ms} ms`;
+        if (error) { const d = document.createElement('div'); d.className = 'err'; d.textContent = error.message; tr.cells[1].append(d); }
+        results.push({ name: t.name, pass: !error, ms, error: error ? error.message : null });
+    }
+    const failed = results.filter((r) => !r.pass).length;
+    summary.textContent = failed ? `${failed} of ${results.length} failed` : `All ${results.length} passed`;
+    summary.className = failed ? 'bad' : 'ok';
+    runBtn.disabled = false;
+    window.__testResults = results; // read by run.py
+}
+runBtn.addEventListener('click', run);
+if (new URLSearchParams(location.search).has('autorun')) run();
+</script>
+</body>
+</html>

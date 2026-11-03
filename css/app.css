@@ -439,7 +439,7 @@ input[type="range"].settings-control { accent-color: var(--slider-thumb); }
 
 /* --- Hints & toasts --- */
 .patch-hint {
-    position: absolute; left: 50%; bottom: 1rem; transform: translateX(-50%); z-index: 30;
+    position: absolute; left: 50%; bottom: 4rem; transform: translateX(-50%); z-index: 30;
     background: var(--header-bg); color: var(--header-text); font-size: 0.8rem; padding: 0.4rem 0.8rem; border-radius: 9999px;
     box-shadow: var(--module-shadow); pointer-events: none; opacity: 0; transition: opacity 0.2s; white-space: nowrap;
 }
@@ -484,3 +484,87 @@ input[type="range"].settings-control { accent-color: var(--slider-thumb); }
 #module-browser.position-bottom .module-search { flex: 0 0 12rem; margin: 0 0.5rem 0 0; align-self: center; }
 #module-browser.position-bottom .search-empty { align-self: center; white-space: nowrap; }
 @media (hover: none) { .search-key { display: none; } }
+
+/* Selection */
+.module.selected-module { box-shadow: 0 0 0 2px var(--slider-thumb), var(--module-shadow); }
+.select-box { position: absolute; display: none; z-index: 40; pointer-events: none; border: 1px solid var(--slider-thumb); background: rgba(59, 130, 246, 0.12); border-radius: 2px; }
+main#workspace.select-mode { cursor: crosshair; }
+
+/* Header extras */
+.header-btn:disabled { opacity: 0.35; cursor: default; }
+.header-btn:disabled:hover { background: none; }
+.menu-wrap { position: relative; }
+.dropdown {
+    position: absolute; right: 0; top: calc(100% + 6px); min-width: 250px; display: none; flex-direction: column;
+    background: var(--sub-menu-bg); color: var(--sub-menu-text); border: 1px solid var(--sub-menu-border);
+    border-radius: 0.375rem; box-shadow: var(--sub-menu-shadow); padding: 0.35rem; z-index: 280000;
+}
+.dropdown.open { display: flex; }
+.dropdown button {
+    display: flex; justify-content: space-between; align-items: center; gap: 1rem; text-align: left;
+    background: none; border: none; padding: 0.45rem 0.6rem; border-radius: 0.25rem; font-size: 0.85rem; color: inherit;
+}
+.dropdown button:hover:not(:disabled) { background: var(--sub-menu-btn-bg); }
+.dropdown button:disabled { opacity: 0.4; cursor: default; }
+.dropdown button.checked::before { content: '✓'; margin-right: -0.5rem; }
+.dropdown kbd { opacity: 0.6; font-size: 0.7rem; }
+.dropdown hr { border: none; border-top: 1px solid var(--sub-menu-border); margin: 0.3rem 0; }
+@media (max-width: 560px) { .app-title { display: none; } .header-right { gap: 0.15rem; } .header-btn { padding: 0.35rem; } }
+
+/* Selection toolbar */
+.selection-bar {
+    position: absolute; left: 50%; bottom: 1rem; transform: translateX(-50%); z-index: 35; max-width: calc(100% - 16px); overflow-x: auto; scrollbar-width: none;
+    display: flex; align-items: center; gap: 0.25rem; padding: 0.3rem; border-radius: 9999px;
+    background: var(--header-bg); color: var(--header-text); box-shadow: var(--module-shadow); font-size: 0.8rem; white-space: nowrap;
+}
+.selection-bar span { padding: 0 0.5rem; opacity: 0.8; }
+.selection-bar button { background: rgba(255,255,255,0.08); border: none; color: inherit; border-radius: 9999px; padding: 0.3rem 0.7rem; font-size: 0.8rem; }
+.selection-bar button:hover { background: rgba(255,255,255,0.18); }
+.selection-bar button.danger { color: #fca5a5; }
+
+/* Quick add */
+.quick-add {
+    position: fixed; z-index: 270000; width: 240px; display: none; flex-direction: column;
+    background: var(--sub-menu-bg); border: 1px solid var(--sub-menu-border); border-radius: 0.5rem; box-shadow: var(--sub-menu-shadow); padding: 0.4rem;
+}
+.quick-add.open { display: flex; }
+.quick-add input {
+    height: 2.1rem; border-radius: 0.3rem; border: 1px solid var(--slider-thumb); background: var(--module-bg); color: var(--module-text);
+    padding: 0 0.6rem; font-size: 0.9rem; outline: none; user-select: text; -webkit-user-select: text;
+}
+.quick-add-list { max-height: 280px; overflow-y: auto; margin-top: 0.35rem; display: flex; flex-direction: column; }
+.quick-add-list button {
+    text-align: left; background: none; border: none; color: var(--sub-menu-text); padding: 0.35rem 0.5rem; border-radius: 0.25rem; font-size: 0.85rem;
+    display: flex; justify-content: space-between; gap: 0.5rem;
+}
+.quick-add-list button small { opacity: 0.55; font-size: 0.7rem; white-space: nowrap; }
+.quick-add-list button.active, .quick-add-list button:hover { background: var(--sub-menu-btn-bg); }
+.quick-add-empty { font-size: 0.8rem; opacity: 0.6; padding: 0.4rem; }
+
+/* Jack readout */
+.jack-readout {
+    position: fixed; z-index: 240000; pointer-events: none; display: none; min-width: 120px;
+    background: var(--header-bg); color: var(--header-text); border-radius: 0.375rem; padding: 0.35rem 0.55rem; font-size: 0.75rem;
+    box-shadow: var(--module-shadow); font-variant-numeric: tabular-nums; transform: translate(-50%, calc(-100% - 14px));
+}
+.jack-readout.visible { display: block; }
+.jack-readout .jr-title { font-weight: 600; margin-bottom: 0.15rem; white-space: nowrap; }
+.jack-readout .jr-value { font-size: 0.9rem; font-weight: 600; }
+.jack-readout .jr-sub { opacity: 0.7; white-space: nowrap; }
+.jack-readout .jr-bar { height: 4px; background: rgba(255,255,255,0.15); border-radius: 2px; margin-top: 0.25rem; position: relative; overflow: hidden; }
+.jack-readout .jr-bar i { position: absolute; top: 0; bottom: 0; background: #34d399; }
+.sub-menu-readout { font-size: 0.75rem; font-variant-numeric: tabular-nums; text-align: center; padding: 0.15rem 0; }
+
+.library-row { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; font-size: 0.85rem; }
+.library-row .param-button { width: auto; }
+
+.rec-btn.recording { background: #dc2626 !important; border-color: #dc2626 !important; color: #fff !important; animation: rec-pulse 1.2s ease-in-out infinite; }
+@keyframes rec-pulse { 50% { opacity: 0.75; } }
+.module select + select, .module .param-container + select { margin-top: 0.25rem; }
+.module-content > select { margin-bottom: 0.5rem; }
+
+@media (max-width: 480px) {
+    .selection-bar { gap: 0.15rem; padding: 0.25rem; }
+    .selection-bar span { padding: 0 0.3rem; }
+    .selection-bar button { padding: 0.3rem 0.55rem; font-size: 0.75rem; }
+}

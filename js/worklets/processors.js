@@ -573,6 +573,42 @@ class EdgeProcessor extends Base {
     }
 }
 
+// --- Recorder: passes audio through and streams stereo blocks to the main thread while armed ---
+class RecorderProcessor extends Base {
+    constructor() {
+        super();
+        this.rec = false;
+        this.size = 16384;
+        this.fill = 0;
+        this.l = new Float32Array(this.size); this.r = new Float32Array(this.size);
+        this.onMessage = (e) => {
+            if (e.data === 'start') { this.rec = true; this.fill = 0; }
+            if (e.data === 'stop') { this.flush(true); this.rec = false; }
+        };
+    }
+    flush(done = false) {
+        const l = this.l.slice(0, this.fill), r = this.r.slice(0, this.fill);
+        this.port.postMessage({ l, r, done }, [l.buffer, r.buffer]);
+        this.fill = 0;
+    }
+    process(inputs, outputs) {
+        if (!this.alive) return false;
+        const inp = inputs[0], out = outputs[0];
+        const L = inp && inp[0], R = inp && (inp[1] || inp[0]);
+        const n = out[0] ? out[0].length : 128;
+        for (let c = 0; c < out.length; c++) { const src = c === 0 ? L : R; if (src) out[c].set(src); else out[c].fill(0); }
+        if (this.rec) {
+            for (let i = 0; i < n; i++) {
+                this.l[this.fill] = L ? L[i] : 0;
+                this.r[this.fill] = R ? R[i] : 0;
+                if (++this.fill === this.size) this.flush();
+            }
+        }
+        return true;
+    }
+}
+
+registerProcessor('ma-recorder', RecorderProcessor);
 registerProcessor('ma-clockmod', ClockModProcessor);
 registerProcessor('ma-euclid', EuclidProcessor);
 registerProcessor('ma-probgate', ProbGateProcessor);

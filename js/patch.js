@@ -315,6 +315,99 @@ export class Patch {
         return [...this.connections.values()].filter((c) => (dir === 'out' ? c.from : c.to).mod === mod && (dir === 'out' ? c.from : c.to).port === port);
     }
 
+    // Run fn with change events held back, then send a single 'structure' event.
+    batch(fn) {
+        const depth = this.suspendEvents;
+        this.suspendEvents++;
+        try { return fn(); } finally { this.suspendEvents = depth; this.changed('structure'); }
+    }
+
+    // Bring the patch to a saved state by changing only what differs (used by undo/redo),
+    // so untouched modules keep running without a glitch.
+    applySnapshot(data) {
+        return this.batch(() => {
+            const want = new Map();
+            for (const s of data.modules || []) if (s && registry.has(s.type)) want.set(s.id, s);
+            // Permanent modules (Output) are kept and re-identified rather than recreated.
+            for (const s of want.values()) {
+                const def = registry.get(s.type);
+                if (def.deletable === false && !this.modules.has(s.id)) {
+                    const ex = [...this.modules.values()].find((m) => m.type === s.type);
+                    if (ex) this.restoreInto(ex, s);
+                }
+            }
+            for (const m of [...this.modules.values()]) {
+                const s = want.get(m.id);
+                if (!s || s.type !== m.type) {
+                    if (m.def.deletable === false) continue;
+                    for (const c of [...this.connections.values()]) if (c.from.mod === m || c.to.mod === m) this.disconnect(c.id, false);
+                    m.dispose();
+                    this.modules.delete(m.id);
+                }
+            }
+            for (const s of want.values()) {
+                const m = this.modules.get(s.id);
+                if (!m) { this.addModule(s.type, s); continue; }
+                if (m.x !== s.x || m.y !== s.y) m.setPosition(s.x, s.y);
+                if (!!s.minimized !== m.minimized) { m.minimized = !!s.minimized; m.element.classList.toggle('minimized', m.minimized); m.minBtn.textContent = m.minimized ? '+' : '−'; }
+                for (const [k, v] of Object.entries(s.params || {})) {
+                    if (!(k in m.params)) continue;
+                    const nv = sanitize(m.def.params[k], v);
+                    if (JSON.stringify(nv) !== JSON.stringify(m.params[k])) { m.params[k] = nv; m.applyParam(k); }
+                }
+                m.locks = new Set(Array.isArray(s.locks) ? s.locks : []);
+                m.refreshControls();
+            }
+            const key = (f, fp, t, tp) => `${f}|${fp}|${t}|${tp}`;
+            const wantC = new Map();
+            for (const c of data.connections || []) if (c && Array.isArray(c.from) && Array.isArray(c.to)) wantC.set(key(c.from[0], c.from[1], c.to[0], c.to[1]), c);
+            for (const c of [...this.connections.values()]) {
+                const w = wantC.get(key(c.from.mod.id, c.from.port, c.to.mod.id, c.to.port));
+                if (!w) this.disconnect(c.id, false);
+                else { if (w.gain !== c.gain) this.setCableGain(c.id, Number(w.gain ?? 1)); wantC.delete(key(c.from.mod.id, c.from.port, c.to.mod.id, c.to.port)); }
+            }
+            for (const c of wantC.values()) {
+                const a = this.modules.get(c.from[0]), b = this.modules.get(c.to[0]);
+                if (a && b) this.connect({ mod: a, port: c.from[1], dir: 'out' }, { mod: b, port: c.to[1], dir: 'in' }, Number(c.gain ?? 1));
+            }
+        });
+    }
+
+    // Serialise a set of modules and the cables between them (copy / subpatch export).
+    serializeGroup(mods) {
+        const set = new Set(mods.filter((m) => m.def.deletable !== false));
+        return {
+            app: 'modularaudio', kind: 'subpatch', version: 1,
+            modules: [...set].map((m) => m.serialize()),
+            connections: [...this.connections.values()].filter((c) => set.has(c.from.mod) && set.has(c.to.mod))
+                .map((c) => ({ from: [c.from.mod.id, c.from.port], to: [c.to.mod.id, c.to.port], gain: c.gain })),
+        };
+    }
+    // Add a group of modules (paste / subpatch import) with fresh ids, its top-left at (x, y).
+    // Never replaces anything already in the patch.
+    insert(data, x, y) {
+        if (!data || !Array.isArray(data.modules)) throw new Error('Not a Modular Audio subpatch.');
+        const mods = data.modules.filter((s) => s && registry.has(s.type) && registry.get(s.type).deletable !== false && !registry.get(s.type).singleton);
+        const skipped = data.modules.filter((s) => s && !registry.has(s.type)).map((s) => s.type);
+        if (!mods.length) return { added: [], skipped };
+        const x0 = Math.min(...mods.map((s) => (Number.isFinite(s.x) ? s.x : 0)));
+        const y0 = Math.min(...mods.map((s) => (Number.isFinite(s.y) ? s.y : 0)));
+        const idMap = new Map();
+        const added = this.batch(() => {
+            const out = [];
+            for (const s of mods) {
+                const m = this.addModule(s.type, { ...s, id: undefined, x: x + ((Number.isFinite(s.x) ? s.x : 0) - x0), y: y + ((Number.isFinite(s.y) ? s.y : 0) - y0) });
+                if (m) { idMap.set(s.id, m); out.push(m); }
+            }
+            for (const c of Array.isArray(data.connections) ? data.connections : []) {
+                const a = idMap.get(c?.from?.[0]), b = idMap.get(c?.to?.[0]);
+                if (a && b) this.connect({ mod: a, port: c.from[1], dir: 'out' }, { mod: b, port: c.to[1], dir: 'in' }, Number(c.gain ?? 1));
+            }
+            return out;
+        });
+        return { added, skipped };
+    }
+
     clear() {
         this.suspendEvents++;
         for (const id of [...this.connections.keys()]) this.disconnect(id, false);
@@ -328,7 +421,7 @@ export class Patch {
     }
     serialize(view) {
         return {
-            app: 'modularaudio', version: 1,
+            app: 'modularaudio', kind: 'patch', version: 1,
             modules: [...this.modules.values()].map((m) => m.serialize()),
             connections: [...this.connections.values()].map((c) => ({ from: [c.from.mod.id, c.from.port], to: [c.to.mod.id, c.to.port], gain: c.gain })),
             view,
@@ -336,6 +429,7 @@ export class Patch {
     }
     load(data) {
         if (!data || typeof data !== 'object' || !Array.isArray(data.modules)) throw new Error('Not a Modular Audio preset.');
+        if (data.kind === 'subpatch') throw new Error('This file is a subpatch. Use “Add Subpatch” to add it to your patch.');
         const depth = this.suspendEvents;
         this.suspendEvents++;
         const skipped = [];
