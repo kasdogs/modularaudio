@@ -317,3 +317,173 @@ test('Jack readout shows live values', async ({ A, app }) => {
     t.dispose();
     assert(d.value === '+0.500', `readout said ${d.value}`);
 });
+
+// ---------- batch: slew, transient shaper, calculator, keys, drum worklet ----------
+const lastValue = (ctx, mod, port) => {
+    const an = ctx.createAnalyser(); an.fftSize = 256;
+    const o = mod.outputs[port]; o.node.connect(an, o.index);
+    const d = new Float32Array(256);
+    return () => { an.getFloatTimeDomainData(d); return d[255]; };
+};
+const edgeTimes = (ctx, mod, port) => {
+    const n = new AudioWorkletNode(ctx, 'ma-edge', { numberOfInputs: 1, numberOfOutputs: 0 });
+    const o = mod.outputs[port]; o.node.connect(n, o.index);
+    const ev = [];
+    n.port.onmessage = (e) => ev.push(e.data);
+    return ev;
+};
+
+test('Slew Limiter: linear and exponential rise times', async ({ A }) => {
+    const { patch, audio } = A, ctx = audio.ctx;
+    patch.clear();
+    const src = patch.addModule('math', { params: { offset: 0 } });
+    const sl = patch.addModule('slew', { params: { rise: 0.5, fall: 0.5, shape: 0 } });
+    C(patch, src, 'out', sl, 'in');
+    const v = lastValue(ctx, sl, 'out');
+    await wait(150);
+    src.setParam('offset', 1);
+    await wait(250);
+    const lin = v();
+    assert(lin > 0.38 && lin < 0.62, `linear: ${lin.toFixed(3)} after 250 ms of a 500 ms rise (want ≈0.5)`);
+    await wait(400);
+    assert(Math.abs(v() - 1) < 0.01, 'linear did not settle');
+    sl.setParam('shape', 1); src.setParam('offset', 0);
+    await wait(600);
+    const ex = v();
+    assert(ex < 0.05, `exponential fall not ~99% done after its time (${ex.toFixed(3)})`);
+});
+
+test('Slew Limiter: trigger delay timing and follow-gate mode', async ({ A }) => {
+    const { patch, audio } = A, ctx = audio.ctx;
+    patch.clear();
+    const clk = patch.addModule('clock', { params: { bpm: 120, div: 4 } }); // 8 pulses/s, 62.5 ms high
+    const sl = patch.addModule('slew', { params: { tdelay: 0.1, tmode: 'fixed', tlength: 0.02 } });
+    C(patch, clk, 'x1', sl, 'gate');
+    const src = edgeTimes(ctx, clk, 'x1'), del = edgeTimes(ctx, sl, 'gout');
+    await wait(1200);
+    const ons = (ev) => ev.filter((e) => e.on).map((e) => e.t);
+    const a = ons(src), b = ons(del);
+    assert(b.length >= a.length - 2, `delayed ${b.length} of ${a.length}`);
+    const d = b.slice(0, 5).map((t, i) => t - a[i]);
+    assert(d.every((x) => Math.abs(x - 0.1) < 0.002), `delays ${d.map((x) => (x * 1000).toFixed(1)).join(', ')} ms (want 100)`);
+    const widthsFixed = del.reduce((acc, e, i) => (e.on && del[i + 1] && !del[i + 1].on ? acc.concat(del[i + 1].t - e.t) : acc), []);
+    assert(widthsFixed.length && widthsFixed.every((w) => Math.abs(w - 0.02) < 0.002), `fixed pulse widths ${widthsFixed.map((w) => (w * 1000).toFixed(1))}`);
+    sl.setParam('tmode', 'follow');
+    del.length = 0;
+    await wait(800);
+    // Ignore pulses already in flight when the mode changed.
+    const widths = del.reduce((acc, e, i) => (e.on && del[i + 1] && !del[i + 1].on ? acc.concat(del[i + 1].t - e.t) : acc), []).slice(2);
+    assert(widths.length && widths.every((w) => Math.abs(w - 0.0625) < 0.002), `follow widths ${widths.map((w) => (w * 1000).toFixed(1))} ms (want 62.5)`);
+});
+
+test('Old Trig Delay presets load into Slew Limiter', async ({ A }) => {
+    const { patch } = A;
+    patch.load({ app: 'modularaudio', kind: 'patch', modules: [{ id: 'clock-1', type: 'clock' }, { id: 'trigdelay-2', type: 'trigdelay', params: { delay: 0.25, length: 0.05 } }, { id: 'drum-3', type: 'drum' }],
+        connections: [{ from: ['clock-1', 'x1'], to: ['trigdelay-2', 'in'] }, { from: ['trigdelay-2', 'out'], to: ['drum-3', 'trig'] }] });
+    const s = patch.modules.get('trigdelay-2');
+    assert(s && s.type === 'slew' && s.params.tdelay === 0.25 && s.params.tlength === 0.05, 'not migrated');
+    assert(patch.connections.size === 2, `cables ${patch.connections.size} (want 2)`);
+});
+
+test('Transient Shaper: attack shapes punch; threshold disables it', async ({ A }) => {
+    const { patch, audio } = A, ctx = audio.ctx;
+    patch.clear();
+    const clk = patch.addModule('clock', { params: { bpm: 120, div: 2 } });
+    const d = patch.addModule('drum', { params: { voice: 'snare', decay: 1.5 } });
+    const ts = patch.addModule('transient', { params: { attack: 0, attackTh: -60 } });
+    C(patch, clk, 'x1', d, 'trig'); C(patch, d, 'out', ts, 'in');
+    const an = analyse(ctx, ts.outputs.out.node, 0, 8192);
+    const crest = async () => { let pk = 0, rmsSum = 0, n = 0; for (let t = 0; t < 1200; t += 50) { await wait(50); const s = an.stats(); pk = Math.max(pk, s.peak); rmsSum += s.rms; n++; } return pk / (rmsSum / n); };
+    ts.setParam('attack', 1); await wait(300); const up = await crest();
+    ts.setParam('attack', -1); await wait(300); const down = await crest();
+    assert(up > down * 1.15, `attack +100% crest ${up.toFixed(2)} vs −100% ${down.toFixed(2)}`);
+    ts.setParam('attack', 1); ts.setParam('attackTh', 0); await wait(300);
+    const gains = []; const off = ts.worklets[0].port.onmessage;
+    ts.worklets[0].port.onmessage = (e) => { gains.push(e.data.g); off(e); };
+    await wait(800);
+    ts.worklets[0].port.onmessage = off;
+    assert(Math.max(...gains.map(Math.abs)) < 1, `gain moved ${Math.max(...gains.map(Math.abs)).toFixed(2)} dB with threshold above the signal`);
+});
+
+test('Calculator: BPM ↔ ms ↔ Hz, ×2/÷2, note ↔ Hz', async ({ A, app }) => {
+    const { patch } = A;
+    patch.clear();
+    const c = patch.addModule('calc', { params: { bpm: 120, div: 0.25, feel: 'straight' } });
+    const inputs = c.element.querySelectorAll('.calc-input');
+    const [bpm, ms, hz, pHz, pNote] = inputs;
+    assert(ms.value === '500.00 ms' && hz.value === '2.000 Hz', `120 BPM 1/4 → ${ms.value}, ${hz.value}`);
+    c.setParam('div', 0.125); c.setParam('feel', 'dotted');
+    assert(ms.value === '375.00 ms', `dotted 1/8 → ${ms.value}`);
+    const btn = (t, i = 0) => [...c.element.querySelectorAll('.calc-row .param-button')].filter((b) => b.textContent === t)[i];
+    btn('×2').click(); assert(c.params.bpm === 240, `×2 → ${c.params.bpm}`);
+    btn('÷2').click(); assert(c.params.bpm === 120, `÷2 → ${c.params.bpm}`);
+    c.setParam('div', 0.25); c.setParam('feel', 'straight');
+    ms.value = '250'; ms.dispatchEvent(new app.Event('change'));
+    assert(Math.abs(c.params.bpm - 240) < 1e-6, `250 ms → ${c.params.bpm} BPM`);
+    pNote.value = 'A4'; pNote.dispatchEvent(new app.Event('change'));
+    assert(Math.abs(c.params.hz - 440) < 1e-9, `A4 → ${c.params.hz}`);
+    pHz.value = '261.63'; pHz.dispatchEvent(new app.Event('change'));
+    assert(pNote.value === 'C4', `261.63 Hz → ${pNote.value}`);
+});
+
+test('Keys: tracker layout over two octaves and scale lock', async ({ A, app }) => {
+    const { patch, audio } = A, ctx = audio.ctx;
+    patch.clear();
+    const k = patch.addModule('keys', { params: { octave: 3 } });
+    const pitch = lastValue(ctx, k, 'pitch'), gate = lastValue(ctx, k, 'gate');
+    const play = async (code) => {
+        app.dispatchEvent(new app.KeyboardEvent('keydown', { code, key: 'x' }));
+        await wait(40);
+        const p = pitch(), g = gate();
+        app.dispatchEvent(new app.KeyboardEvent('keyup', { code, key: 'x' }));
+        await wait(20);
+        return { semis: Math.round(p * 12), g };
+    };
+    const want = { KeyZ: -12, KeyS: -11, KeyM: -1, Comma: 0, KeyQ: 0, Digit2: 1, KeyI: 12, Slash: 4, BracketRight: 19 };
+    for (const [code, semis] of Object.entries(want)) {
+        const r = await play(code);
+        assert(r.g === 1 && r.semis === semis, `${code} → ${r.semis} st from C4 (want ${semis}), gate ${r.g}`);
+    }
+    k.setParam('scale', 'ionian'); k.setParam('root', 0);
+    assert((await play('Digit2')).semis === 0, 'C# not snapped to C in C major');
+    assert((await play('Digit5')).semis === 5, 'F# not snapped to F in C major');
+    k.setParam('scale', 'dorian'); k.setParam('root', 2); // D dorian = C major notes
+    assert((await play('Digit3')).semis === 2, 'D# not snapped to D in D dorian');
+    k.setParam('scale', 'custom');
+    k.setParam('mask', Array.from({ length: 12 }, (_, i) => i === 4)); // only E
+    assert((await play('KeyQ')).semis === 4 || (await play('KeyQ')).semis === -8, 'custom scale did not snap to E');
+    assert((await play('KeyT')).semis === 4, 'G not snapped to E with only E allowed');
+});
+
+test('Drum Voice (worklet): 12 voices, choke, sample-exact timing', async ({ A }) => {
+    const { patch, audio } = A, ctx = audio.ctx;
+    patch.clear();
+    const d = patch.addModule('drum', {}), an = analyse(ctx, d.outputs.out.node);
+    for (const v of d.def.params.voice.options.map((o) => o.value)) {
+        d.setParam('voice', v); await wait(100);
+        d.element.querySelector('.btn-row button').click();
+        const pk = await an.peakOver(200);
+        assert(pk > 0.05, `${v} silent (${pk.toFixed(3)})`);
+        assert(pk < 2.5, `${v} too loud (${pk.toFixed(2)})`);
+    }
+    d.setParam('voice', 'ohh'); await wait(700); d.element.querySelector('.btn-row button').click(); await wait(60);
+    d.setParam('voice', 'chh'); await wait(5); d.element.querySelector('.btn-row button').click(); await wait(200);
+    assert(an.stats().peak < 0.005, 'open hat not choked');
+    // Timing: record a clock-driven kick and check the onsets are evenly spaced to the sample.
+    d.setParam('voice', 'rim'); d.setParam('decay', 0.3);
+    const clk = patch.addModule('clock', { params: { bpm: 240, div: 1 } }); // every 250 ms
+    C(patch, clk, 'x1', d, 'trig');
+    const rec = new AudioWorkletNode(ctx, 'ma-recorder', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2] });
+    d.outputs.out.node.connect(rec);
+    const parts = [];
+    rec.port.onmessage = (e) => parts.push(e.data.l);
+    rec.port.postMessage('start'); await wait(1400); rec.port.postMessage('stop'); await wait(150);
+    d.outputs.out.node.disconnect(rec);
+    const all = new Float32Array(parts.reduce((a, p) => a + p.length, 0)); let o = 0; for (const p of parts) { all.set(p, o); o += p.length; }
+    const onsets = [];
+    for (let i = 0; i < all.length; i++) if (Math.abs(all[i]) > 0.02 && (!onsets.length || i - onsets[onsets.length - 1] > ctx.sampleRate * 0.1)) onsets.push(i);
+    const iv = onsets.slice(1).map((x, i) => x - onsets[i]);
+    const target = ctx.sampleRate * 0.25;
+    assert(iv.length >= 3, `found ${onsets.length} onsets`);
+    assert(iv.every((x) => Math.abs(x - target) <= 2), `onset spacing ${iv.join(', ')} samples (want ${target})`);
+});

@@ -608,6 +608,279 @@ class RecorderProcessor extends Base {
     }
 }
 
+// --- Slew limiter + trigger delay ---
+// Input 0: CV to slew. Input 1: gate to delay.
+// Out 0: slewed CV, 1: delayed gate, 2: high while rising, 3: high while falling.
+class SlewProcessor extends Base {
+    static get parameterDescriptors() {
+        return [
+            { name: 'rise', defaultValue: 0.1, minValue: 0, maxValue: 30, automationRate: 'a-rate' },
+            { name: 'fall', defaultValue: 0.1, minValue: 0, maxValue: 30, automationRate: 'a-rate' },
+            { name: 'shape', defaultValue: 0, minValue: 0, maxValue: 1, automationRate: 'k-rate' }, // 0 linear, 1 exponential
+            { name: 'delay', defaultValue: 0.1, minValue: 0, maxValue: 10, automationRate: 'a-rate' },
+            { name: 'length', defaultValue: 0.01, minValue: 0.001, maxValue: 5, automationRate: 'k-rate' },
+            { name: 'follow', defaultValue: 0, minValue: 0, maxValue: 1, automationRate: 'k-rate' }, // 1: delay both edges of the gate
+        ];
+    }
+    constructor() { super(); this.y = 0; this.g = new GateDetector(); this.t = 0; this.events = []; this.offAt = -1; this.high = false; this.gap = 0; }
+    process(inputs, outputs, params) {
+        if (!this.alive) return false;
+        const o = outputs.map((x) => x && x[0]);
+        const n = (o.find(Boolean) || []).length;
+        if (!n) return true;
+        const cv = inputs[0] && inputs[0][0], gate = inputs[1] && inputs[1][0];
+        const P = (p, i) => (p.length > 1 ? p[i] : p[0]);
+        const exp = params.shape[0] > 0.5, follow = params.follow[0] > 0.5, len = params.length[0] * sampleRate;
+        for (let i = 0; i < n; i++) {
+            // --- slew: linear moves 1 unit per Rise/Fall time; exponential reaches 99% in that time
+            const x = cv ? cv[i] : 0, d = x - this.y;
+            const t = d > 0 ? P(params.rise, i) : P(params.fall, i);
+            if (t <= 0) this.y = x;
+            else if (exp) this.y += d * (1 - Math.exp(-4.6 / (t * sampleRate)));
+            else { const step = 1 / (t * sampleRate); this.y += d > 0 ? Math.min(d, step) : Math.max(d, -step); }
+            if (o[0]) o[0][i] = this.y;
+            if (o[2]) o[2][i] = d > 1e-4 ? 1 : 0;
+            if (o[3]) o[3][i] = d < -1e-4 ? 1 : 0;
+            // --- trigger delay
+            this.t++;
+            const was = this.g.high;
+            const rise = gate ? this.g.step(gate[i]) : false;
+            const fell = was && !this.g.high;
+            const dl = Math.max(0, P(params.delay, i)) * sampleRate;
+            if (this.events.length < 512) {
+                if (rise) this.events.push([this.t + dl, 1]);
+                if (fell && follow) this.events.push([this.t + dl, 0]);
+            }
+            while (this.events.length && this.events[0][0] <= this.t) {
+                const [, on] = this.events.shift();
+                if (on) { if (this.high || this.t < this.offAt) this.gap = 24; this.high = true; this.offAt = follow ? Infinity : this.t + len; }
+                else { this.high = false; this.offAt = -1; }
+            }
+            if (this.high && this.t >= this.offAt) this.high = false;
+            let gv = this.high ? 1 : 0;
+            if (this.gap > 0) { this.gap--; gv = 0; }
+            if (o[1]) o[1][i] = gv;
+        }
+        return true;
+    }
+}
+
+// --- Transient shaper: attack and sustain gain, each with its own threshold (stereo-linked) ---
+class TransientProcessor extends Base {
+    static get parameterDescriptors() {
+        return [
+            { name: 'attack', defaultValue: 0, minValue: -1, maxValue: 1, automationRate: 'k-rate' },
+            { name: 'attackTh', defaultValue: -40, minValue: -80, maxValue: 0, automationRate: 'k-rate' },
+            { name: 'release', defaultValue: 0, minValue: -1, maxValue: 1, automationRate: 'k-rate' },
+            { name: 'releaseTh', defaultValue: -40, minValue: -80, maxValue: 0, automationRate: 'k-rate' },
+            { name: 'speed', defaultValue: 0.5, minValue: 0, maxValue: 1, automationRate: 'k-rate' },
+        ];
+    }
+    constructor() {
+        super();
+        this.fa = 0; this.sa = 0; this.fr = 0; this.sr = 0; this.g = 1;
+        this.blocks = 0; this.att = 0; this.rel = 0;
+    }
+    process(inputs, outputs, params) {
+        if (!this.alive) return false;
+        const inp = inputs[0], out = outputs[0];
+        if (!inp || !inp.length) { for (const c of out) c.fill(0); return true; }
+        const n = out[0].length;
+        const coef = (ms) => 1 - Math.exp(-1 / (ms * 0.001 * sampleRate));
+        const sp = params.speed[0]; // longer windows when slower
+        const fastA = coef(0.3), slowA = coef(4 + 40 * sp), rel = coef(40 + 160 * sp);
+        const fastR = coef(15 + 60 * sp), slowR = coef(150 + 900 * sp), atk = coef(0.3);
+        const A = params.attack[0], R = params.release[0], aTh = params.attackTh[0], rTh = params.releaseTh[0];
+        const gSmooth = coef(1);
+        const db = (v) => 20 * Math.log10(v + 1e-9);
+        let am = 0, rm = 0;
+        for (let i = 0; i < n; i++) {
+            let x = 0;
+            for (let c = 0; c < inp.length; c++) x = Math.max(x, Math.abs(inp[c][i]));
+            // attack detector: same release, different attack speeds
+            this.fa += (x - this.fa) * (x > this.fa ? fastA : rel);
+            this.sa += (x - this.sa) * (x > this.sa ? slowA : rel);
+            // sustain detector: same attack, different release speeds
+            this.fr += (x - this.fr) * (x > this.fr ? atk : fastR);
+            this.sr += (x - this.sr) * (x > this.sr ? atk : slowR);
+            const lvl = db(this.fa);
+            // Each section only works on signal above its own threshold (6 dB soft knee).
+            const wA = Math.min(1, Math.max(0, (lvl - aTh) / 6 + 0.5));
+            const wR = Math.min(1, Math.max(0, (db(this.sr) - rTh) / 6 + 0.5));
+            const tA = Math.max(0, db(this.fa) - db(this.sa));
+            const tR = Math.max(0, db(this.sr) - db(this.fr));
+            let gdb = A * Math.min(24, tA * 1.5) * wA + R * Math.min(24, tR * 1.2) * wR;
+            gdb = Math.max(-30, Math.min(24, gdb));
+            const target = Math.pow(10, gdb / 20);
+            this.g += (target - this.g) * gSmooth;
+            for (let c = 0; c < out.length; c++) out[c][i] = (inp[c] || inp[0])[i] * this.g;
+            am = Math.max(am, A * tA * wA); rm = Math.max(rm, R * tR * wR);
+        }
+        this.att = Math.max(am, this.att * 0.7); this.rel = Math.max(rm, this.rel * 0.7);
+        if (++this.blocks >= 8) { this.blocks = 0; this.port.postMessage({ a: this.att, r: this.rel, g: 20 * Math.log10(this.g) }); }
+        return true;
+    }
+}
+
+// --- Drum voice: all synthesis on the audio thread, sample-accurate triggering ---
+// Inputs: 0 trigger, 1 accent CV, 2 pitch CV (1V/oct), 3 decay CV (octaves). One mono output.
+class SVF { // Simper/Cytomic state-variable filter
+    constructor() { this.ic1 = 0; this.ic2 = 0; this.set(1000, 0.7); }
+    set(f, q) { const g = Math.tan(Math.PI * Math.min(f, sampleRate * 0.45) / sampleRate), k = 1 / Math.max(0.05, q); this.a1 = 1 / (1 + g * (g + k)); this.a2 = g * this.a1; this.a3 = g * this.a2; this.k = k; }
+    tick(v0) {
+        const v3 = v0 - this.ic2, v1 = this.a1 * this.ic1 + this.a2 * v3, v2 = this.ic2 + this.a2 * this.ic1 + this.a3 * v3;
+        this.ic1 = 2 * v1 - this.ic1; this.ic2 = 2 * v2 - this.ic2;
+        this.lp = v2; this.bp = v1; this.hp = v0 - this.k * v1 - v2;
+        return this;
+    }
+}
+const VOICES = ['kick', 'snare', 'chh', 'ohh', 'clap', 'tom', 'rim', 'cowbell', 'cymbal', 'conga', 'shaker', 'zap'];
+const HAT_RATIOS = [205.3, 304.4, 369.6, 522.7, 540, 800];
+class DrumProcessor extends Base {
+    static get parameterDescriptors() {
+        const k = (name, def, min, max) => ({ name, defaultValue: def, minValue: min, maxValue: max, automationRate: 'k-rate' });
+        return [k('voice', 0, 0, VOICES.length - 1), k('tune', 0, -48, 48), k('decay', 1, 0.05, 8), k('tone', 0.5, 0, 1),
+            k('snap', 0.5, 0, 1), k('sweep', 0.5, 0, 1), k('drive', 0, 0, 1), k('accent', 0.5, 0, 1)];
+    }
+    constructor() {
+        super();
+        this.voices = []; // { kind, t, vel, pm, D, tone, snap, sweep, ph:[], f:[...], fade }
+        this.g = new GateDetector();
+        this.seed = 0x12345678;
+        this.dc = 0; this.dcy = 0;
+        this.onMessage = (e) => { if (e.data && e.data.hit) this.manual = e.data.hit; };
+    }
+    noise() { let x = this.seed; x ^= x << 13; x ^= x >>> 17; x ^= x << 5; this.seed = x >>> 0; return (this.seed / 4294967296) * 2 - 1; }
+    start(P, vel, pitchCv, decayCv) {
+        const kind = VOICES[Math.round(P.voice)] || 'kick';
+        const v = {
+            kind, t: 0, vel, pm: Math.pow(2, (P.tune + pitchCv * 12) / 12), D: P.decay * Math.pow(2, decayCv),
+            tone: P.tone, snap: P.snap, sweep: P.sweep, ph: [0, 0, 0, 0, 0, 0], f1: new SVF(), f2: new SVF(), fade: 1, fading: 0,
+        };
+        // Choke: closed hats cut open hats and cymbals; any new hit fades same-kind tails quickly (no clicks).
+        for (const o of this.voices) {
+            if (kind === 'chh' && (o.kind === 'ohh' || o.kind === 'cymbal')) o.fading = 0.003;
+            if (o.kind === kind && (kind === 'kick' || kind === 'tom' || kind === 'conga' || kind === 'zap')) o.fading = 0.004;
+        }
+        if (this.voices.length >= 8) this.voices.shift();
+        this.voices.push(v);
+        this.port.postMessage(1);
+    }
+    render(v) {
+        const sr = sampleRate, t = v.t / sr, D = v.D, pm = v.pm, T = v.tone, S = v.snap, W = v.sweep;
+        const e = (tau) => Math.exp(-t / Math.max(1e-4, tau));
+        const osc = (i, f, shape = 'sin') => {
+            v.ph[i] += f / sr; v.ph[i] -= Math.floor(v.ph[i]);
+            const p = v.ph[i];
+            if (shape === 'sq') return p < 0.5 ? 1 : -1;
+            if (shape === 'tri') return 4 * Math.abs(p - 0.5) - 1;
+            return Math.sin(2 * Math.PI * p);
+        };
+        const atk = Math.min(1, t / 0.0005); // 0.5 ms anti-click attack
+        let y = 0, done = false;
+        switch (v.kind) {
+            case 'kick': {
+                const base = 48 * pm, f = base * (1 + W * 7 * e(0.008 + 0.05 * (1 - T)));
+                const amp = e(0.32 * D); y = osc(0, f) * amp;
+                if (t < 0.03) { v.f1.set(2500 + 6000 * T, 0.7); y += v.f1.tick(this.noise()).hp * e(0.0025) * S * 0.9; }
+                y *= 1.1; done = amp < 1e-4; break;
+            }
+            case 'snare': {
+                const tones = (osc(0, 185 * pm * (1 + W * 0.5 * e(0.01)), 'tri') + osc(1, 330 * pm * (1 + W * 0.5 * e(0.01)), 'tri') * 0.6) * e(0.07 * D) * (1 - S * 0.5);
+                v.f1.set(1500 + 5000 * T, 0.6);
+                const nz = v.f1.tick(this.noise()).hp * e(0.13 * D) * (0.35 + S);
+                y = (tones * 0.7 + nz * 0.8); done = t > 0.13 * D * 9.2; break;
+            }
+            case 'chh': case 'ohh': case 'cymbal': {
+                const tau = v.kind === 'chh' ? 0.016 : v.kind === 'ohh' ? 0.16 : 0.9;
+                const fm = pm * (1.25 + T * 0.75) * (v.kind === 'cymbal' ? 0.8 : 1);
+                let m = 0; for (let k = 0; k < 6; k++) m += osc(k, HAT_RATIOS[k] * fm, 'sq');
+                m = m / 6 + this.noise() * S * 0.8;
+                v.f1.set(v.kind === 'cymbal' ? 6500 : 9500, 0.9); v.f2.set(v.kind === 'cymbal' ? 4500 : 7000, 0.7);
+                const amp = e(tau * D) * (v.kind === 'cymbal' ? 0.8 + 0.2 * e(0.02) : 1);
+                y = v.f2.tick(v.f1.tick(m).bp).hp * amp * 2.2; done = amp < 1e-4; break;
+            }
+            case 'clap': {
+                v.f1.set(1100 * (1 + T * 1.5), 1.6);
+                const n = v.f1.tick(this.noise()).bp;
+                let env = 0;
+                for (const k of [0, 0.010, 0.021]) if (t >= k && t < 0.032) env = Math.max(env, Math.exp(-(t - k) / 0.0035));
+                if (t >= 0.031) env = Math.max(env, (0.45 + 0.55 * S) * Math.exp(-(t - 0.031) / (0.11 * D)));
+                y = n * env * 2.4; done = t > 0.031 + 0.11 * D * 9.2; break;
+            }
+            case 'tom': case 'conga': {
+                const conga = v.kind === 'conga';
+                const base = (conga ? 210 : 105) * pm * (1 + T);
+                const f = base * (1 + W * (conga ? 0.25 : 0.7) * e(conga ? 0.015 : 0.04));
+                const amp = e((conga ? 0.11 : 0.2) * D);
+                y = (osc(0, f) + (conga ? 0.25 * osc(1, f * 1.5) : 0)) * amp;
+                if (t < 0.02) { v.f1.set(3000, 0.7); y += v.f1.tick(this.noise()).lp * e(0.004) * S * 0.6; }
+                done = amp < 1e-4; break;
+            }
+            case 'rim': {
+                v.f1.set(4200, 2.5);
+                y = osc(0, 1700 * pm * (0.8 + T * 0.4), 'tri') * e(0.011 * D) + v.f1.tick(this.noise()).bp * e(0.004) * S * 1.2;
+                done = t > 0.011 * D * 9.2 + 0.03; break;
+            }
+            case 'cowbell': {
+                v.f1.set(2640 * (0.6 + T * 0.8), 3);
+                const m = (osc(0, 540 * pm, 'sq') + osc(1, 800 * pm, 'sq')) * 0.5;
+                const amp = 0.65 * e(0.012) + 0.35 * e(0.14 * D);
+                y = v.f1.tick(m).bp * amp * 2.2; done = amp < 1e-4; break;
+            }
+            case 'shaker': {
+                const a = Math.min(1, t / (0.004 + 0.02 * S));
+                v.f1.set(5000 + 4000 * T, 1.2);
+                const amp = a * e(0.05 * D);
+                y = v.f1.tick(this.noise()).hp * amp * 1.4; done = t > 0.03 && amp < 1e-4; break;
+            }
+            case 'zap': {
+                const f = (60 + 3000 * W * e(0.01 + 0.04 * (1 - T))) * pm;
+                const amp = e(0.12 * D);
+                y = osc(0, f) * amp; done = amp < 1e-4; break;
+            }
+        }
+        if (v.fading) { v.fade -= 1 / (v.fading * sr); if (v.fade <= 0) done = true; }
+        v.t++;
+        if (v.t > sr * 20) done = true;
+        return { y: y * atk * v.vel * Math.max(0, v.fade), done };
+    }
+    process(inputs, outputs, params) {
+        if (!this.alive) return false;
+        const out = outputs[0][0];
+        if (!out) return true;
+        const trig = inputs[0] && inputs[0][0], acc = inputs[1] && inputs[1][0], pcv = inputs[2] && inputs[2][0], dcv = inputs[3] && inputs[3][0];
+        const P = {};
+        for (const k of ['voice', 'tune', 'decay', 'tone', 'snap', 'sweep', 'drive', 'accent']) P[k] = params[k][0];
+        const drive = P.drive, dk = 1 + drive * 14, dn = Math.tanh(dk);
+        const dcC = 1 - Math.exp(-2 * Math.PI * 10 / sampleRate);
+        for (let i = 0; i < out.length; i++) {
+            const hit = (trig && this.g.step(trig[i])) || (i === 0 && this.manual);
+            if (hit) {
+                const vel = Math.max(0.05, Math.min(2, (i === 0 && this.manual ? this.manual : 1) * (1 + (acc ? acc[i] : 0) * (0.25 + P.accent * 1.5))));
+                this.start(P, vel, pcv ? pcv[i] : 0, dcv ? dcv[i] : 0);
+                if (i === 0) this.manual = 0;
+            }
+            let y = 0;
+            for (let k = this.voices.length - 1; k >= 0; k--) {
+                const r = this.render(this.voices[k]);
+                y += r.y;
+                if (r.done) this.voices.splice(k, 1);
+            }
+            if (drive > 0.001) y = Math.tanh(y * dk) / dn;
+            // DC blocker
+            this.dc += (y - this.dc) * dcC;
+            const o = y - this.dc;
+            out[i] = Number.isFinite(o) ? o : 0;
+            if (!Number.isFinite(this.dc)) this.dc = 0;
+        }
+        return true;
+    }
+}
+
+registerProcessor('ma-slew', SlewProcessor);
+registerProcessor('ma-transient', TransientProcessor);
+registerProcessor('ma-drum', DrumProcessor);
 registerProcessor('ma-recorder', RecorderProcessor);
 registerProcessor('ma-clockmod', ClockModProcessor);
 registerProcessor('ma-euclid', EuclidProcessor);

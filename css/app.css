@@ -568,3 +568,32 @@ main#workspace.select-mode { cursor: crosshair; }
     .selection-bar span { padding: 0 0.3rem; }
     .selection-bar button { padding: 0.3rem 0.55rem; font-size: 0.75rem; }
 }
+
+/* Keys (two octaves) */
+.keys.two { height: 84px; }
+.keys.two .key-label { font-size: 0.5rem; }
+.key.black .key-label { color: #9ca3af; bottom: 2px; }
+.key.white.out-of-scale { background: #d1d5db; }
+.key.black.out-of-scale { background: #4b5563; }
+.dark .key.white.out-of-scale { background: #9ca3af; }
+.key.root::after { content: ''; position: absolute; left: 50%; bottom: 14px; width: 6px; height: 6px; margin-left: -3px; border-radius: 50%; background: #f59e0b; }
+.key.black.root::after { bottom: 10px; }
+.key.editing { cursor: cell; }
+.key.editing.white:not(.out-of-scale) { background: #bbf7d0; }
+.key.editing.black:not(.out-of-scale) { background: #15803d; }
+.two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 0 0.5rem; }
+.two-col > .param-container.hidden + * { grid-column: 1 / -1; }
+/* Section labels, calculator */
+.section-label { font-size: 0.65rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; opacity: 0.6; margin: 0.6rem 0 0.35rem; border-top: 1px solid var(--module-header-border); padding-top: 0.45rem; }
+.module-content > .section-label:first-child { border-top: none; padding-top: 0; margin-top: 0; }
+.calc-row { display: flex; align-items: center; gap: 0.3rem; margin-bottom: 0.35rem; }
+.calc-row .param-button { width: auto; padding: 0.15rem 0.45rem; flex-shrink: 0; }
+.calc-row select { flex: 1; min-width: 0; }
+.calc-label { font-size: 0.7rem; opacity: 0.75; width: 2.6rem; flex-shrink: 0; }
+.calc-input { flex: 1; min-width: 0; height: 1.75rem; font-size: 0.8rem; padding: 0 0.4rem; border: 1px solid var(--module-border); border-radius: 0.25rem; background: var(--module-bg); color: var(--module-text); font-variant-numeric: tabular-nums; user-select: text; -webkit-user-select: text; }
+.calc-input:focus { outline: none; border-color: var(--slider-thumb); }
+.calc-table { width: 100%; border-collapse: collapse; font-size: 0.68rem; font-variant-numeric: tabular-nums; margin: 0.2rem 0 0.3rem; }
+.calc-table th { font-weight: 600; opacity: 0.65; text-align: right; padding: 0.1rem 0.2rem; }
+.calc-table td { text-align: right; padding: 0.15rem 0.25rem; cursor: pointer; border-radius: 0.2rem; }
+.calc-table td:hover { background: var(--module-header-bg); }
+.calc-table td.current { background: var(--slider-thumb); color: #fff; }

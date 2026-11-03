@@ -8,6 +8,7 @@ import { el, toast, clearCssCache } from './util.js';
 import { EXAMPLE_PATCH } from './example.js';
 import { haystack, rank as rankDef } from './search.js';
 import { History } from './history.js';
+import { keysActive } from './modules/sources.js';
 import { Editor, decodeShare, download } from './editor.js';
 import { Readouts } from './readouts.js';
 import { listSamples, clearSamples, onLibraryChange } from './samples.js';
@@ -17,6 +18,7 @@ import './modules/effects.js';
 import './modules/fx.js';
 import './modules/batch3.js';
 import './modules/batch4.js';
+import './modules/batch5.js';
 import './modules/sequencing.js';
 import './modules/utility.js';
 
@@ -205,7 +207,10 @@ function buildBrowser(patch, ws, history) {
     });
     // "/" focuses search from anywhere (opens the drawer on phones).
     document.addEventListener('keydown', (e) => {
-        if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey) return;
+        const k = e.key.toLowerCase();
+        const slash = e.key === '/' && !e.ctrlKey && !e.metaKey && !e.altKey && !keysActive(); // '/' is a note key while Keys exists
+        const ctrlK = k === 'k' && (e.ctrlKey || e.metaKey);
+        if (!slash && !ctrlK) return;
         const a = document.activeElement;
         if (a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.isContentEditable)) return;
         e.preventDefault();

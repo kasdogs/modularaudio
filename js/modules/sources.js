@@ -3,6 +3,9 @@ import { registerModule } from '../patch.js';
 import { el, formatFrequency, formatDb, dbToGain, NOTE_NAMES, midiToName, typingInField } from '../util.js';
 import { PITCH_PARAMS } from '../controls.js';
 
+const stop = (e) => e.stopPropagation();
+const button = (text) => { const b = el('button', { class: 'param-button', type: 'button', text }); b.addEventListener('pointerdown', stop); return b; };
+
 // Cached custom waveforms per context
 const waveCache = new WeakMap();
 function revSaw(ctx) {
@@ -155,122 +158,212 @@ registerModule({
     },
 });
 
-// --- Keys: on-screen and QWERTY keyboard ---
-const QWERTY = ['a', 'w', 's', 'e', 'd', 'f', 't', 'g', 'y', 'h', 'u', 'j', 'k'];
+// --- Keys: two-octave on-screen and computer keyboard (tracker layout), with scale lock ---
+// Physical key positions (KeyboardEvent.code), so the layout works on any keyboard language.
+// Low octave: Z row = white keys, A row = black keys. High octave: Q row = white, number row = black.
+const KEYMAP = {
+    KeyZ: 0, KeyS: 1, KeyX: 2, KeyD: 3, KeyC: 4, KeyV: 5, KeyG: 6, KeyB: 7, KeyH: 8, KeyN: 9, KeyJ: 10, KeyM: 11,
+    Comma: 12, KeyL: 13, Period: 14, Semicolon: 15, Slash: 16,
+    KeyQ: 12, Digit2: 13, KeyW: 14, Digit3: 15, KeyE: 16, KeyR: 17, Digit5: 18, KeyT: 19, Digit6: 20, KeyY: 21, Digit7: 22, KeyU: 23,
+    KeyI: 24, Digit9: 25, KeyO: 26, Digit0: 27, KeyP: 28, BracketLeft: 29, Equal: 30, BracketRight: 31,
+};
+// Label shown on each on-screen key (low row for the first octave, Q row for the second).
+const KEY_LABELS = ['Z', 'S', 'X', 'D', 'C', 'V', 'G', 'B', 'H', 'N', 'J', 'M', 'Q', '2', 'W', '3', 'E', 'R', '5', 'T', '6', 'Y', '7', 'U', 'I'];
+export const SCALES = {
+    chromatic: null,
+    ionian: [0, 2, 4, 5, 7, 9, 11], dorian: [0, 2, 3, 5, 7, 9, 10], phrygian: [0, 1, 3, 5, 7, 8, 10], lydian: [0, 2, 4, 6, 7, 9, 11],
+    mixolydian: [0, 2, 4, 5, 7, 9, 10], aeolian: [0, 2, 3, 5, 7, 8, 10], locrian: [0, 1, 3, 5, 6, 8, 10],
+};
+const SCALE_OPTIONS = [
+    { value: 'chromatic', label: 'Off (chromatic)' }, { value: 'ionian', label: 'Ionian (major)' }, { value: 'dorian', label: 'Dorian' },
+    { value: 'phrygian', label: 'Phrygian' }, { value: 'lydian', label: 'Lydian' }, { value: 'mixolydian', label: 'Mixolydian' },
+    { value: 'aeolian', label: 'Aeolian (natural minor)' }, { value: 'locrian', label: 'Locrian' }, { value: 'custom', label: 'Custom (pick notes)' },
+];
+// Pitch classes (0 = C) allowed by a scale setting.
+export function allowedSet(scale, root, mask) {
+    if (scale === 'chromatic') return null;
+    if (scale === 'custom') return new Set(mask.map((on, pc) => (on ? pc : -1)).filter((pc) => pc >= 0));
+    return new Set(SCALES[scale].map((i) => (i + root) % 12));
+}
+// Move a MIDI note to the nearest allowed note (ties go down). Returns null when nothing is allowed.
+export function snapNote(note, allowed) {
+    if (!allowed) return note;
+    if (!allowed.size) return null;
+    for (let d = 0; d < 12; d++) {
+        if (allowed.has(((note - d) % 12 + 12) % 12)) return note - d;
+        if (allowed.has(((note + d) % 12 + 12) % 12)) return note + d;
+    }
+    return note;
+}
+
 const keysModules = new Set();
-const heldQwerty = new Set();
+const heldCodes = new Set();
 window.addEventListener('keydown', (e) => {
     if (e.repeat || e.ctrlKey || e.metaKey || e.altKey || typingInField()) return;
-    const k = e.key.toLowerCase();
-    const i = QWERTY.indexOf(k);
-    if (i >= 0) { heldQwerty.add(k); keysModules.forEach((km) => km.press(i, 'kb')); return; }
-    if (k === 'z' || k === 'x') keysModules.forEach((km) => km.shiftOctave(k === 'z' ? -1 : 1));
+    const semi = KEYMAP[e.code];
+    if (semi === undefined || !keysModules.size) return;
+    e.preventDefault();
+    heldCodes.add(e.code);
+    keysModules.forEach((km) => km.press(semi, e.code));
 });
 window.addEventListener('keyup', (e) => {
-    const k = e.key.toLowerCase();
-    const i = QWERTY.indexOf(k);
-    if (i >= 0 && heldQwerty.delete(k)) keysModules.forEach((km) => km.release(i, 'kb'));
+    if (!heldCodes.delete(e.code)) return;
+    keysModules.forEach((km) => km.release(e.code));
 });
-window.addEventListener('blur', () => { heldQwerty.clear(); keysModules.forEach((km) => km.releaseAll()); });
+window.addEventListener('blur', () => { heldCodes.clear(); keysModules.forEach((km) => km.releaseAll()); });
+export const keysActive = () => keysModules.size > 0;
 
 registerModule({
-    type: 'keys', title: 'Keys', category: 'Sources', blurb: 'Play notes: touch or A–K on a keyboard',
-    width: 240,
+    type: 'keys', title: 'Keys', category: 'Sources', blurb: 'Two octaves: touch, or Z/A and Q/1 key rows', width: 340,
     params: {
-        octave: { label: 'Octave', min: 0, max: 8, default: 4, step: 1, format: (v) => `C${v}` },
+        octave: { label: 'Octave', min: 0, max: 7, default: 3, step: 1, format: (v) => `C${v}–C${v + 2}` },
         glide: { label: 'Glide', min: 0, max: 1, default: 0, curve: 3, format: (v) => (v < 0.001 ? 'Off' : `${Math.round(v * 1000)} ms`) },
+        scale: { label: 'Scale Lock', default: 'chromatic', options: SCALE_OPTIONS },
+        root: { label: 'Key', default: 0, options: NOTE_NAMES.map((n, i) => ({ value: i, label: n })) },
+        mask: { default: Array(12).fill(true) },
     },
     create(m, ctx) {
         const pitch = ctx.createConstantSource(); pitch.offset.value = 0; pitch.start();
         const gate = ctx.createConstantSource(); gate.offset.value = 0; gate.start();
-        const keysEl = el('div', { class: 'keys' });
-        const whites = [0, 2, 4, 5, 7, 9, 11, 12];
-        const keyEls = [];
+        const keysEl = el('div', { class: 'keys two' });
+        const WHITE = [0, 2, 4, 5, 7, 9, 11];
+        const whites = [];
+        for (let s = 0; s <= 24; s++) if (WHITE.includes(s % 12)) whites.push(s);
         const ww = 100 / whites.length;
-        for (let s = 0; s <= 12; s++) {
-            const white = whites.includes(s);
-            const k = el('div', { class: `key ${white ? 'white' : 'black'}`, dataset: { semi: s } });
-            if (white) {
-                const wi = whites.indexOf(s);
-                Object.assign(k.style, { left: `${wi * ww}%`, width: `${ww}%` });
-                k.append(el('span', { class: 'key-label', text: QWERTY[s].toUpperCase() }));
-            } else {
-                const wi = whites.indexOf(s - 1);
-                Object.assign(k.style, { left: `${(wi + 1) * ww - ww * 0.32}%`, width: `${ww * 0.64}%` });
-            }
+        const keyEls = [];
+        for (let s = 0; s <= 24; s++) {
+            const white = WHITE.includes(s % 12);
+            const k = el('div', { class: `key ${white ? 'white' : 'black'}`, dataset: { semi: s } }, el('span', { class: 'key-label', text: KEY_LABELS[s] || '' }));
+            if (white) Object.assign(k.style, { left: `${whites.indexOf(s) * ww}%`, width: `${ww}%` });
+            else Object.assign(k.style, { left: `${(whites.indexOf(s - 1) + 1) * ww - ww * 0.32}%`, width: `${ww * 0.64}%` });
             keyEls[s] = k;
             keysEl.append(k);
         }
-        const readout = el('div', { class: 'info-row' }, el('span', { class: 'node-label', text: 'Note' }), el('strong', { text: '—' }));
-        m.content.append(keysEl, readout);
+        const down = button('−'), up = button('+'), edit = button('Edit Scale');
+        down.title = 'Octave down'; up.title = 'Octave up';
+        edit.title = 'Click keys to add or remove notes from the custom scale';
+        const readout = el('strong', { text: '—' });
+        const scaleInfo = el('span', { class: 'node-label' });
+        m.content.append(keysEl,
+            el('div', { class: 'info-row' }, el('span', { class: 'node-label', text: 'Note' }), readout),
+            el('div', { class: 'btn-row' }, down, up, edit));
+        const grid = el('div', { class: 'two-col' });
+        m.content.append(grid);
+        m.select('scale', grid);
+        m.select('root', grid);
+        m.content.append(el('div', { class: 'info-row' }, scaleInfo));
         m.slider('octave');
         m.slider('glide');
-        const stack = []; // held semitones, most recent last
+        let editing = false;
+        const allowed = () => allowedSet(m.params.scale, Number(m.params.root), m.params.mask);
+        const stack = []; // [{ code, semi }], most recent last
+        const outNote = (semi) => snapNote((m.params.octave + 1) * 12 + semi, allowed());
         const setNote = (semi) => {
-            const midi = (m.params.octave + 1) * 12 + semi;
-            const t = ctx.currentTime;
-            const v = (midi - 60) / 12; // C4 = 0
+            const n = outNote(semi);
+            if (n === null) return false;
+            const t = ctx.currentTime, v = (n - 60) / 12; // C4 = 0
             pitch.offset.cancelScheduledValues(t);
             if (m.params.glide > 0.001 && gate.offset.value > 0.5) { pitch.offset.setValueAtTime(pitch.offset.value, t); pitch.offset.setTargetAtTime(v, t, m.params.glide / 3); }
             else pitch.offset.setValueAtTime(v, t);
-            readout.lastChild.textContent = midiToName(midi);
+            const played = (m.params.octave + 1) * 12 + semi;
+            readout.textContent = n === played ? midiToName(n) : `${midiToName(played)} → ${midiToName(n)}`;
+            return true;
         };
         const gateOn = (retrigger) => {
             const t = ctx.currentTime;
             gate.offset.cancelScheduledValues(t);
-            if (retrigger) { gate.offset.setValueAtTime(0, t); gate.offset.setValueAtTime(1, t + 0.002); }
-            else gate.offset.setValueAtTime(1, t);
+            if (retrigger) { gate.offset.setValueAtTime(0, t); gate.offset.setValueAtTime(1, t + 0.002); } else gate.offset.setValueAtTime(1, t);
+        };
+        const paint = () => {
+            const set = allowed(), root = Number(m.params.root);
+            keyEls.forEach((k, s) => {
+                const pc = s % 12;
+                k.classList.toggle('out-of-scale', !!set && !set.has(pc));
+                k.classList.toggle('root', !!set && m.params.scale !== 'custom' && pc === root);
+                k.classList.toggle('editing', editing);
+                k.classList.toggle('down', stack.some((h) => h.semi === s));
+            });
+            edit.classList.toggle('active', editing);
+            edit.classList.toggle('hidden', m.params.scale !== 'custom');
+            m.controls.root && m.controls.root.el.classList.toggle('hidden', m.params.scale === 'chromatic' || m.params.scale === 'custom');
+            const names = set ? [...set].sort((a, b) => ((a - root + 12) % 12) - ((b - root + 12) % 12)).map((pc) => NOTE_NAMES[pc]) : null;
+            scaleInfo.textContent = !set ? 'All 12 notes' : set.size ? `Notes: ${names.join(' ')}` : 'No notes selected';
         };
         const api = {
-            press(semi, src) {
-                if (stack.includes(semi)) return;
-                stack.push(semi);
-                keyEls[semi].classList.add('down');
-                setNote(semi);
+            press(semi, code) {
+                if (stack.some((h) => h.code === code)) return;
+                if (!setNote(semi)) return;
+                stack.push({ code, semi });
                 gateOn(m.params.glide <= 0.001);
+                paint();
             },
-            release(semi) {
-                const i = stack.indexOf(semi);
+            release(code) {
+                const i = stack.findIndex((h) => h.code === code);
                 if (i < 0) return;
                 stack.splice(i, 1);
-                keyEls[semi].classList.remove('down');
-                if (stack.length) setNote(stack[stack.length - 1]);
+                if (stack.length) setNote(stack[stack.length - 1].semi);
                 else { gate.offset.cancelScheduledValues(ctx.currentTime); gate.offset.setValueAtTime(0, ctx.currentTime); }
+                paint();
             },
-            releaseAll() { [...stack].forEach((s) => api.release(s)); },
-            shiftOctave(d) { m.setParam('octave', Math.min(8, Math.max(0, m.params.octave + d))); },
+            releaseAll() { [...stack].forEach((h) => api.release(h.code)); },
         };
-        // Touch / mouse with glissando across keys
+        // Touch / mouse with glissando; in Edit Scale mode a tap toggles that note.
         const active = new Map();
         keysEl.addEventListener('pointerdown', (e) => {
             e.stopPropagation();
             e.preventDefault();
-            keysEl.setPointerCapture(e.pointerId);
             const k = e.target.closest('.key');
             if (!k) return;
             const s = +k.dataset.semi;
-            active.set(e.pointerId, s);
-            api.press(s);
+            if (editing) {
+                const mask = [...m.params.mask];
+                mask[s % 12] = !mask[s % 12];
+                m.setParam('mask', mask);
+                return;
+            }
+            keysEl.setPointerCapture(e.pointerId);
+            const code = `ptr${e.pointerId}`;
+            active.set(e.pointerId, { s, code });
+            api.press(s, code);
         });
         keysEl.addEventListener('pointermove', (e) => {
-            if (!active.has(e.pointerId)) return;
+            const a = active.get(e.pointerId);
+            if (!a) return;
             const k = document.elementFromPoint(e.clientX, e.clientY)?.closest('.key');
             if (!k || !keysEl.contains(k)) return;
             const s = +k.dataset.semi;
-            const prev = active.get(e.pointerId);
-            if (s !== prev) { api.press(s); api.release(prev); active.set(e.pointerId, s); }
+            if (s === a.s) return;
+            const code = `ptr${e.pointerId}:${s}`;
+            api.press(s, code);
+            api.release(a.code);
+            active.set(e.pointerId, { s, code });
         });
-        const up = (e) => {
-            if (!active.has(e.pointerId)) return;
-            api.release(active.get(e.pointerId));
-            active.delete(e.pointerId);
-        };
-        keysEl.addEventListener('pointerup', up);
-        keysEl.addEventListener('pointercancel', up);
+        const upH = (e) => { const a = active.get(e.pointerId); if (!a) return; api.release(a.code); active.delete(e.pointerId); };
+        keysEl.addEventListener('pointerup', upH);
+        keysEl.addEventListener('pointercancel', upH);
+        down.addEventListener('click', () => m.setParam('octave', Math.max(0, m.params.octave - 1)));
+        up.addEventListener('click', () => m.setParam('octave', Math.min(7, m.params.octave + 1)));
+        edit.addEventListener('click', () => { editing = !editing; paint(); });
         keysModules.add(api);
         m.addOutput('pitch', 'Pitch', 'cv', pitch);
         m.addOutput('gate', 'Gate', 'gate', gate);
+        let lastScale = m.params.scale;
         return {
+            update(key, v) {
+                if (key === 'scale') {
+                    // Starting a custom scale copies the notes of the previous one.
+                    if (v === 'custom' && lastScale !== 'custom') {
+                        const prev = allowedSet(lastScale, Number(m.params.root), m.params.mask);
+                        if (prev) m.params.mask = Array.from({ length: 12 }, (_, pc) => prev.has(pc));
+                    }
+                    if (v !== 'custom') editing = false;
+                    lastScale = v;
+                }
+                if (key === 'mask' && (!Array.isArray(v) || v.length !== 12)) m.params.mask = Array(12).fill(true);
+                if (stack.length) setNote(stack[stack.length - 1].semi);
+                paint();
+            },
+            refresh: paint,
             dispose() { keysModules.delete(api); try { pitch.stop(); gate.stop(); } catch (e) {} },
         };
     },

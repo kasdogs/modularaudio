@@ -5,7 +5,7 @@ A browser modular synthesizer for phone and desktop, served at kas.dog/modularau
 Plain Web Audio with AudioWorklets and no build step: open `index.html` through any static server (worklets need `http://localhost` or HTTPS, not `file://`).
 
 ## Using it
-- **Add modules** from the browser on the left (the ☰ button on phones). Press <kbd>/</kbd> to search by name or by synth terms (vcf, echo, envelope…); <kbd>Enter</kbd> adds the top match, arrow keys move through results.
+- **Add modules** from the browser on the left (the ☰ button on phones). Press <kbd>/</kbd> (or <kbd>Ctrl/⌘ K</kbd>, which also works while a Keys module is using <kbd>/</kbd> as a note) to search by name or by synth terms (vcf, echo, envelope…); <kbd>Enter</kbd> adds the top match, arrow keys move through results.
 - **Patch** by dragging from one jack to another, or tap an output then an input. Drag a plugged input to move or unplug its cable.
 - **Hold or right-click a jack** to list its cables, change their gain, or delete them. Tap a cable for its gain popup.
 - **Sliders:** hold <kbd>Shift</kbd> while dragging for very fine adjustment (1/25 speed), or slide your finger away from the slider on touch screens. Arrow keys nudge (Shift for finer), click a value to type it, double-tap a label to reset, and use the lock icon to protect a setting.
@@ -27,6 +27,12 @@ Plain Web Audio with AudioWorklets and no build step: open `index.html` through 
 - **Sample library:** files loaded into Sampler, Granular or Conv Reverb are stored in this browser (IndexedDB, de-duplicated by content hash) and come back after reloads, undo, paste and preset loads. Each of those modules has a *Library* menu; Settings shows the total and can clear it.
 - **Recorder:** records its input to a 48 kHz WAV (16/24-bit PCM or 32-bit float, stereo or mono), resampled with the browser's resampler when the device runs at another rate.
 - **MIDI In:** pick a device (Chrome, Edge, Firefox; Safari has no Web MIDI). For chords, add several MIDI In modules with the same *Polyphony group* size and give each a different *Voice*.
+
+## Keys
+Two octaves in tracker layout, by physical key position (works on any keyboard language):
+- Low octave: <kbd>Z</kbd>…<kbd>/</kbd> white keys, <kbd>A</kbd>…<kbd>'</kbd> row black keys (S D · G H J · L ;).
+- High octave: <kbd>Q</kbd>…<kbd>]</kbd> white keys, <kbd>1</kbd>…<kbd>=</kbd> row black keys (2 3 · 5 6 7 · 9 0 · =).
+- **Scale Lock** snaps every note to Ionian, Dorian, Phrygian, Lydian, Mixolydian, Aeolian, Locrian or a Custom scale in any key (ties snap down). For Custom, press *Edit Scale* and click keys to add or remove notes.
 
 ## Signal conventions
 - **Audio:** ±1. **CV:** 1.0 = one octave on pitch and filter cutoff inputs. **Gates:** high above 0.5.

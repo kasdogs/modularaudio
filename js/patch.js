@@ -27,6 +27,27 @@ export function sanitize(spec, v) {
 }
 let nextConnId = 1;
 
+// Old module types that were merged into newer modules: type rename plus param/port renames.
+const LEGACY = {
+    trigdelay: { type: 'slew', params: { delay: 'tdelay', length: 'tlength' }, ports: { in: 'gate', delay: 'tdelay', out: 'gout' } },
+};
+// Rewrite a saved patch/subpatch so legacy modules load as their replacements.
+export function migrate(data) {
+    if (!data || !Array.isArray(data.modules) || !data.modules.some((m) => m && LEGACY[m.type])) return data;
+    const ports = new Map();
+    const modules = data.modules.map((m) => {
+        const L = m && LEGACY[m.type];
+        if (!L) return m;
+        ports.set(m.id, L.ports);
+        const params = {};
+        for (const [k, v] of Object.entries(m.params || {})) params[L.params[k] || k] = v;
+        return { ...m, type: L.type, params };
+    });
+    const fix = (end) => (Array.isArray(end) && ports.has(end[0]) ? [end[0], ports.get(end[0])[end[1]] || end[1]] : end);
+    const connections = (data.connections || []).map((c) => (c ? { ...c, from: fix(c.from), to: fix(c.to) } : c));
+    return { ...data, modules, connections };
+}
+
 export class Module {
     constructor(def, patch, state = {}) {
         this.def = def;
@@ -325,6 +346,7 @@ export class Patch {
     // Bring the patch to a saved state by changing only what differs (used by undo/redo),
     // so untouched modules keep running without a glitch.
     applySnapshot(data) {
+        data = migrate(data);
         return this.batch(() => {
             const want = new Map();
             for (const s of data.modules || []) if (s && registry.has(s.type)) want.set(s.id, s);
@@ -387,6 +409,7 @@ export class Patch {
     // Never replaces anything already in the patch.
     insert(data, x, y) {
         if (!data || !Array.isArray(data.modules)) throw new Error('Not a Modular Audio subpatch.');
+        data = migrate(data);
         const mods = data.modules.filter((s) => s && registry.has(s.type) && registry.get(s.type).deletable !== false && !registry.get(s.type).singleton);
         const skipped = data.modules.filter((s) => s && !registry.has(s.type)).map((s) => s.type);
         if (!mods.length) return { added: [], skipped };
@@ -430,6 +453,7 @@ export class Patch {
     load(data) {
         if (!data || typeof data !== 'object' || !Array.isArray(data.modules)) throw new Error('Not a Modular Audio preset.');
         if (data.kind === 'subpatch') throw new Error('This file is a subpatch. Use “Add Subpatch” to add it to your patch.');
+        data = migrate(data);
         const depth = this.suspendEvents;
         this.suspendEvents++;
         const skipped = [];

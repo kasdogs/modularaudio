@@ -317,26 +317,6 @@ registerModule({
 });
 
 registerModule({
-    type: 'trigdelay', title: 'Trig Delay', category: 'Sequencing', blurb: 'Fires a gate after a delay',
-    params: {
-        delay: { label: 'Delay', min: 0.001, max: 5, curve: 'log', default: 0.1, format: formatTime, unit: 's' },
-        length: { label: 'Gate Length', min: 0.001, max: 1, curve: 'log', default: 0.02, format: formatTime, unit: 's' },
-    },
-    create(m, ctx) {
-        const node = m.worklet('ma-trigdelay', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] });
-        const delayCv = ctx.createGain(); delayCv.gain.value = 0.1; // 1 unit = +100 ms
-        delayCv.connect(node.parameters.get('delay'));
-        m.slider('delay'); m.slider('length');
-        m.addInput('in', 'Gate', 'gate', node);
-        m.addInput('delay', 'Delay', 'cv', delayCv);
-        m.addOutput('out', 'Out', 'gate', node);
-        return {
-            update(key, v) { if (key === 'delay') m.set(node.parameters.get('delay'), v, 0.005); else node.parameters.get('length').value = v; },
-        };
-    },
-});
-
-registerModule({
     type: 'trigger', title: 'Trigger', category: 'Sequencing', blurb: 'Manual gate button',
     params: { mode: { label: 'Mode', default: 'momentary', options: [{ value: 'momentary', label: 'Momentary' }, { value: 'latching', label: 'Latching' }] } },
     create(m, ctx) {

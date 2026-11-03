@@ -10,12 +10,13 @@ export const KEYWORDS = {
     compressor: 'dynamics limiter squash', tilteq: 'eq tone bright dark', bitcrusher: 'lofi lo-fi crush decimate', ringmod: 'ring modulator am',
     waveshaper: 'distortion saturation drive overdrive', clipper: 'distortion clip limiter', wavefolder: 'fold distortion west coast',
     clock: 'tempo bpm metronome', sequencer: 'step seq pattern', clockmod: 'divider multiplier divide multiply', clockquant: 'quantize quantise sync',
-    euclid: 'euclidean rhythm pattern', probgate: 'random chance probability bernoulli', trigdelay: 'delay gate trigger', trigger: 'button gate manual',
+    euclid: 'euclidean rhythm pattern', probgate: 'random chance probability bernoulli', trigger: 'button gate manual',
     logic: 'and or xor not gate boolean', comparator: 'threshold schmitt gate', math: 'attenuverter offset scale slew lag sample hold quantize invert',
     follower: 'envelope follower amplitude', dcblock: 'dc offset highpass', stereo: 'width pan mid side balance', tuner: 'pitch note detect',
     scope: 'oscilloscope waveform', spectrum: 'fft analyser analyzer frequency',
     midiin: 'midi keyboard controller usb input hardware note cc', recorder: 'record wav export bounce capture render',
-    drum: 'drum kick snare hat hihat clap tom rim cowbell 808 percussion', granular: 'granular grain cloud texture sampler',
+    slew: 'slew lag portamento glide smooth rise fall trigger delay gate delay trig', transient: 'transient shaper attack sustain punch envelope dynamics',
+    calc: 'calculator bpm hz ms tempo delay time conversion tap', drum: 'drum kick snare hat hihat clap tom rim cowbell 808 percussion', granular: 'granular grain cloud texture sampler',
 };
 
 export function haystack(def) {
