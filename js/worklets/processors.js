@@ -736,6 +736,8 @@ class SVF { // Simper/Cytomic state-variable filter
 }
 const VOICES = ['kick', 'snare', 'chh', 'ohh', 'clap', 'tom', 'rim', 'cowbell', 'cymbal', 'conga', 'shaker', 'zap'];
 const HAT_RATIOS = [205.3, 304.4, 369.6, 522.7, 540, 800];
+// Per-voice gain so every voice peaks near 1.0 at default settings.
+const VOICE_LEVEL = { kick: 0.74, snare: 0.82, chh: 1.95, ohh: 1.2, clap: 0.83, tom: 0.95, rim: 0.68, cowbell: 0.34, cymbal: 1.2, conga: 0.78, shaker: 0.66, zap: 1 };
 class DrumProcessor extends Base {
     static get parameterDescriptors() {
         const k = (name, def, min, max) => ({ name, defaultValue: def, minValue: min, maxValue: max, automationRate: 'k-rate' });
@@ -760,7 +762,8 @@ class DrumProcessor extends Base {
         // Choke: closed hats cut open hats and cymbals; any new hit fades same-kind tails quickly (no clicks).
         for (const o of this.voices) {
             if (kind === 'chh' && (o.kind === 'ohh' || o.kind === 'cymbal')) o.fading = 0.003;
-            if (o.kind === kind && (kind === 'kick' || kind === 'tom' || kind === 'conga' || kind === 'zap')) o.fading = 0.004;
+            // Like a drum machine, each voice is monophonic: a re-trigger fades out its own previous hit.
+            if (o.kind === kind && !o.fading) o.fading = 0.004;
         }
         if (this.voices.length >= 8) this.voices.shift();
         this.voices.push(v);
@@ -843,7 +846,7 @@ class DrumProcessor extends Base {
         if (v.fading) { v.fade -= 1 / (v.fading * sr); if (v.fade <= 0) done = true; }
         v.t++;
         if (v.t > sr * 20) done = true;
-        return { y: y * atk * v.vel * Math.max(0, v.fade), done };
+        return { y: y * atk * v.vel * Math.max(0, v.fade) * (VOICE_LEVEL[v.kind] || 1), done };
     }
     process(inputs, outputs, params) {
         if (!this.alive) return false;
@@ -878,6 +881,102 @@ class DrumProcessor extends Base {
     }
 }
 
+// --- Drum sampler: sample-accurate one-shot playback with drum-style shaping ---
+// Inputs: 0 trigger, 1 accent CV, 2 pitch CV (1V/oct). Stereo output.
+// Choke groups are shared by every drum sampler in the same AudioContext.
+const chokeGroups = new Map(); // group number -> Set(processors)
+class DrumSamplerProcessor extends Base {
+    static get parameterDescriptors() {
+        const k = (name, def, min, max) => ({ name, defaultValue: def, minValue: min, maxValue: max, automationRate: 'k-rate' });
+        return [k('tune', 0, -48, 48), k('decay', 10, 0.005, 10), k('attack', 0, 0, 0.1), k('start', 0, 0, 0.95), k('reverse', 0, 0, 1),
+            k('tone', 0, -1, 1), k('drive', 0, 0, 1), k('pan', 0, -1, 1), k('velocity', 0.5, 0, 1), k('mono', 1, 0, 1), k('choke', 0, 0, 8)];
+    }
+    constructor() {
+        super();
+        this.data = null; this.len = 0;
+        this.voices = [];
+        this.g = new GateDetector();
+        this.lp = [new SVF(), new SVF()]; this.hp = [new SVF(), new SVF()];
+        this.group = 0;
+        this.onMessage = (e) => {
+            const d = e.data;
+            if (d.sample !== undefined) { this.data = d.sample; this.len = d.sample ? d.sample[0].length : 0; this.voices = []; }
+            if (d.hit) this.manual = d.hit;
+        };
+    }
+    setGroup(n) {
+        if (n === this.group) return;
+        if (this.group) chokeGroups.get(this.group)?.delete(this);
+        this.group = n;
+        if (n) { if (!chokeGroups.has(n)) chokeGroups.set(n, new Set()); chokeGroups.get(n).add(this); }
+    }
+    choke() { for (const v of this.voices) if (!v.fading) { v.fading = true; v.fade = 1; } }
+    start(P, vel, pitchCv) {
+        if (!this.data || !this.len) return;
+        if (this.group) for (const p of chokeGroups.get(this.group) || []) if (p !== this) p.choke();
+        if (P.mono > 0.5) this.choke(); else if (this.voices.length >= 16) this.voices.shift();
+        const rate = Math.pow(2, (P.tune + pitchCv * 12) / 12);
+        const rev = P.reverse > 0.5;
+        const startPos = P.start * this.len;
+        this.voices.push({ pos: rev ? Math.max(0, this.len - 2 - startPos) : startPos, step: rev ? -rate : rate, t: 0, vel, fade: 1, fading: false });
+        this.port.postMessage(1);
+    }
+    process(inputs, outputs, params) {
+        if (!this.alive) { this.setGroup(0); return false; }
+        const out = outputs[0];
+        const L = out[0], R = out[1] || out[0], n = L.length;
+        const trig = inputs[0] && inputs[0][0], acc = inputs[1] && inputs[1][0], pcv = inputs[2] && inputs[2][0];
+        const P = {};
+        for (const k of ['tune', 'decay', 'attack', 'start', 'reverse', 'tone', 'drive', 'pan', 'velocity', 'mono', 'choke']) P[k] = params[k][0];
+        this.setGroup(Math.round(P.choke));
+        // Tone: below 0 sweeps a low-pass down, above 0 sweeps a high-pass up.
+        const lpF = P.tone < 0 ? 20000 * Math.pow(150 / 20000, -P.tone) : 20000, hpF = P.tone > 0 ? 20 * Math.pow(4000 / 20, P.tone) : 0;
+        for (const f of this.lp) f.set(lpF, 0.707);
+        for (const f of this.hp) f.set(Math.max(20, hpF), 0.707);
+        const natural = P.decay >= 9.99, dCoef = natural ? 1 : Math.exp(-1 / (P.decay * sampleRate));
+        const att = Math.max(1, P.attack * sampleRate + 0.0005 * sampleRate); // always ≥ 0.5 ms: no clicks
+        const fadeStep = 1 / (0.003 * sampleRate);
+        const dk = 1 + P.drive * 10, dn = Math.tanh(dk);
+        const pl = Math.cos((P.pan + 1) * Math.PI / 4), pr = Math.sin((P.pan + 1) * Math.PI / 4);
+        const chs = this.data ? this.data.length : 0;
+        for (let i = 0; i < n; i++) {
+            const hit = (trig && this.g.step(trig[i])) || (i === 0 && this.manual);
+            if (hit) {
+                const base = i === 0 && this.manual ? this.manual : 1;
+                this.start(P, Math.max(0.05, Math.min(2, base * (1 + (acc ? acc[i] : 0) * (0.25 + P.velocity * 1.5)))), pcv ? pcv[i] : 0);
+                if (i === 0) this.manual = 0;
+            }
+            let yl = 0, yr = 0;
+            for (let k = this.voices.length - 1; k >= 0; k--) {
+                const v = this.voices[k];
+                const p = v.pos, i0 = Math.floor(p);
+                if (i0 < 0 || i0 >= this.len - 1 || (v.fading && v.fade <= 0)) { this.voices.splice(k, 1); continue; }
+                // Cubic (Hermite) interpolation for clean pitch shifting
+                const f = p - i0;
+                const s = (c) => {
+                    const d = this.data[c];
+                    const xm = d[Math.max(0, i0 - 1)], x0 = d[i0], x1 = d[i0 + 1], x2 = d[Math.min(this.len - 1, i0 + 2)];
+                    const c1 = 0.5 * (x1 - xm), c2 = xm - 2.5 * x0 + 2 * x1 - 0.5 * x2, c3 = 0.5 * (x2 - xm) + 1.5 * (x0 - x1);
+                    return ((c3 * f + c2) * f + c1) * f + x0;
+                };
+                let amp = v.vel * Math.min(1, (v.t + 1) / att);
+                if (!natural) { v.env = (v.env ?? 1) * dCoef; amp *= v.env; if (v.env < 1e-4) { this.voices.splice(k, 1); continue; } }
+                if (v.fading) { v.fade -= fadeStep; amp *= Math.max(0, v.fade); }
+                const a = s(0), b = chs > 1 ? s(1) : a;
+                yl += a * amp; yr += b * amp;
+                v.pos += v.step; v.t++;
+            }
+            if (hpF > 0) { yl = this.hp[0].tick(yl).hp; yr = this.hp[1].tick(yr).hp; }
+            if (lpF < 19999) { yl = this.lp[0].tick(yl).lp; yr = this.lp[1].tick(yr).lp; }
+            if (P.drive > 0.001) { yl = Math.tanh(yl * dk) / dn; yr = Math.tanh(yr * dk) / dn; }
+            L[i] = Number.isFinite(yl) ? yl * pl * 1.4142 : 0;
+            if (R !== L) R[i] = Number.isFinite(yr) ? yr * pr * 1.4142 : 0;
+        }
+        return true;
+    }
+}
+
+registerProcessor('ma-drumsampler', DrumSamplerProcessor);
 registerProcessor('ma-slew', SlewProcessor);
 registerProcessor('ma-transient', TransientProcessor);
 registerProcessor('ma-drum', DrumProcessor);

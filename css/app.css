@@ -597,3 +597,7 @@ main#workspace.select-mode { cursor: crosshair; }
 .calc-table td { text-align: right; padding: 0.15rem 0.25rem; cursor: pointer; border-radius: 0.2rem; }
 .calc-table td:hover { background: var(--module-header-bg); }
 .calc-table td.current { background: var(--slider-thumb); color: #fff; }
+
+.sample-pick { display: flex; gap: 0.25rem; }
+.sample-pick select { flex: 1; min-width: 0; }
+.sample-pick .param-button { width: auto; flex-shrink: 0; padding: 0.1rem 0.45rem; }

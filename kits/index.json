@@ -1,0 +1,81 @@
+{
+  "version": 1,
+  "kits": [
+    {
+      "name": "modular audio synth",
+      "folder": "modular audio synth",
+      "samples": [
+        {
+          "file": "Modular_Audio_Synth_Clap.wav",
+          "name": "Clap",
+          "category": "clap"
+        },
+        {
+          "file": "Modular_Audio_Synth_Closed_Hat.wav",
+          "name": "Closed Hat",
+          "category": "closed hat"
+        },
+        {
+          "file": "Modular_Audio_Synth_Conga.wav",
+          "name": "Conga",
+          "category": "conga"
+        },
+        {
+          "file": "Modular_Audio_Synth_Cowbell.wav",
+          "name": "Cowbell",
+          "category": "cowbell"
+        },
+        {
+          "file": "Modular_Audio_Synth_Cymbal.wav",
+          "name": "Cymbal",
+          "category": "cymbal"
+        },
+        {
+          "file": "Modular_Audio_Synth_High_Tom.wav",
+          "name": "High Tom",
+          "category": "tom"
+        },
+        {
+          "file": "Modular_Audio_Synth_Kick.wav",
+          "name": "Kick",
+          "category": "kick"
+        },
+        {
+          "file": "Modular_Audio_Synth_Kick_Long.wav",
+          "name": "Kick Long",
+          "category": "kick"
+        },
+        {
+          "file": "Modular_Audio_Synth_Low_Tom.wav",
+          "name": "Low Tom",
+          "category": "tom"
+        },
+        {
+          "file": "Modular_Audio_Synth_Open_Hat.wav",
+          "name": "Open Hat",
+          "category": "open hat"
+        },
+        {
+          "file": "Modular_Audio_Synth_Rimshot.wav",
+          "name": "Rimshot",
+          "category": "rim"
+        },
+        {
+          "file": "Modular_Audio_Synth_Shaker.wav",
+          "name": "Shaker",
+          "category": "shaker"
+        },
+        {
+          "file": "Modular_Audio_Synth_Snare.wav",
+          "name": "Snare",
+          "category": "snare"
+        },
+        {
+          "file": "Modular_Audio_Synth_Zap.wav",
+          "name": "Zap",
+          "category": "other"
+        }
+      ]
+    }
+  ]
+}

@@ -34,6 +34,11 @@ Two octaves in tracker layout, by physical key position (works on any keyboard l
 - High octave: <kbd>Q</kbd>…<kbd>]</kbd> white keys, <kbd>1</kbd>…<kbd>=</kbd> row black keys (2 3 · 5 6 7 · 9 0 · =).
 - **Scale Lock** snaps every note to Ionian, Dorian, Phrygian, Lydian, Mixolydian, Aeolian, Locrian or a Custom scale in any key (ties snap down). For Custom, press *Edit Scale* and click keys to add or remove notes.
 
+## Drum Sampler and kits
+`kits/<hardware name>/<audio files>` (for example `kits/roland tr77/Roland_TR-77_Kick.wav`). The Drum Sampler's first menu picks the kit, the second the sample; ◀ ▶ step through a kit with a preview. See `kits/README.md`.
+- Browsers can't list folders on GitHub Pages, so the module reads `kits/index.json`. Pushing or uploading files to `kits/` rebuilds it (`.github/workflows/kits-index.yml`); or run `python3 _tools/build_kits_index.py`.
+- Controls: Tune, Decay (Natural = play to the end), Attack, Start offset, Tone (low-pass ↔ high-pass), Drive, Pan, Accent Depth, Level, Direction, Retrigger (mono/poly), Choke Group (shared across modules; hats join Group A automatically), Preview on Select. Inputs: Trig, Accent, Pitch (1V/oct, sampled per hit).
+
 ## Signal conventions
 - **Audio:** ±1. **CV:** 1.0 = one octave on pitch and filter cutoff inputs. **Gates:** high above 0.5.
 - Pitch CV 0 = the oscillator's own note; Keys and Sequencer output 0 for C4.

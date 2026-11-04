@@ -16,7 +16,7 @@ export const KEYWORDS = {
     scope: 'oscilloscope waveform', spectrum: 'fft analyser analyzer frequency',
     midiin: 'midi keyboard controller usb input hardware note cc', recorder: 'record wav export bounce capture render',
     slew: 'slew lag portamento glide smooth rise fall trigger delay gate delay trig', transient: 'transient shaper attack sustain punch envelope dynamics',
-    calc: 'calculator bpm hz ms tempo delay time conversion tap', drum: 'drum kick snare hat hihat clap tom rim cowbell 808 percussion', granular: 'granular grain cloud texture sampler',
+    drumsampler: 'drum sampler kit kits 808 909 tr linn sample machine one-shot kick snare hat', calc: 'calculator bpm hz ms tempo delay time conversion tap', drum: 'drum kick snare hat hihat clap tom rim cowbell 808 percussion', granular: 'granular grain cloud texture sampler',
 };
 
 export function haystack(def) {

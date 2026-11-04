@@ -19,6 +19,7 @@ import './modules/fx.js';
 import './modules/batch3.js';
 import './modules/batch4.js';
 import './modules/batch5.js';
+import './modules/drumsampler.js';
 import './modules/sequencing.js';
 import './modules/utility.js';
 
